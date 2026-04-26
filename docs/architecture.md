@@ -9,8 +9,8 @@ app  →  hunt  →  core
 | Layer | Responsibility | Forbidden imports |
 |-------|----------------|-------------------|
 | `core` | Low-level I/O + domain primitives (memory, HID, window, sniffer, projection, tracking). Server-agnostic. | `hunt`, `app` |
-| `hunt` | Hunting business logic — controller + policies. No SQLite, no argparse. | `app` |
-| `app` | SQLite schema + migrations + seed + profile / server models + wiring + CLI. | (top of stack) |
+| `hunt` | Hunting business logic — controller + policies. No config-file reading, no argparse. | `app` |
+| `app` | JSON config loader + profile / server models + wiring + CLI. | (top of stack) |
 
 The `.cursor/rules/layering.mdc` rule enforces these boundaries
 statically.
@@ -44,22 +44,20 @@ src/ro_bot/
 │   ├── dead_zones/       # DeadZone + filter
 │   └── policies/         # targeting, engagement, heal, buffs, idle_action, escape
 └── app/
-    ├── db/               # connection + schema.sql + migrations + seed
+    ├── config/           # JSON loader + defaults (writes config.json on first run)
     ├── models/           # Server, Profile (hydrated value classes)
-    ├── repositories/     # SQL → model hydration
     ├── session.py        # BotSession: wires core + hunt from a Profile
-    ├── runner.py         # run_hunt_for_profile(db_path, profile_name)
-    └── ...
+    └── runner.py         # run_hunt(config_path)
 ```
 
 ## Dataflow
 
 ```
-CLI `ro-bot hunt --profile NAME`
+CLI `ro-bot hunt --config PATH`
   ↓
-app.runner.run_hunt_for_profile
-  ├─ open_db / apply_migrations / seed_defaults
-  ├─ ProfileRepository.get_by_name → Profile (+ Server)
+app.runner.run_hunt
+  ├─ app.config.load_config → Profile (+ Server)
+  │    └─ writes DEFAULTS to PATH if missing
   └─ BotSession(profile).start()
        ├─ wait_for_game_window (poll up to 120s) + disable mouse accel
        ├─ ArduinoHidBridge.connect()
@@ -75,12 +73,12 @@ run_hunt_loop(controller, should_stop, toggle_pause)
 ## Why layers
 
 - **Testability.** `core` can be unit-tested against mocks of the
-  Win32 surface without touching SQLite or argparse; `hunt` can be
+  Win32 surface without touching disk or argparse; `hunt` can be
   tested against a fake `HidBridge` without real memory reads.
 - **Server portability.** Memory offsets and packet IDs live in
-  `core`; per-server overrides live in SQLite (`server_projection`,
-  `server_dead_zone`). Adding a new private server is a row insert +
-  an override — never a code change in `hunt`.
+  `core`; per-server overrides live in the JSON config
+  (`server.projection`, `server.dead_zones`). Adding a new private
+  server is a config change — never a code change in `hunt`.
 - **Size control.** Shallow layers with explicit interfaces let each
   file stay focused. Soft limit 300 lines, hard 500 — see
   `.cursor/rules/file-size.mdc`.

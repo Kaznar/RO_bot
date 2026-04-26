@@ -29,7 +29,7 @@ tick():
 ```
 
 Constants live in `hunt/constants.py`; per-profile knobs live in
-`HuntConfig` (hydrated from SQLite).
+`HuntConfig` (hydrated from `config.json` by the app layer).
 
 ## Engagement FSM
 

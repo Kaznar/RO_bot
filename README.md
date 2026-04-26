@@ -11,14 +11,18 @@ bridge, refreshes buffs and heals itself. One CLI mode: `hunt`.
 3. Clone, then `uv sync` in the repo root.
 4. Flash the Arduino Pro Micro with the HID firmware from
    `docs/setup.md`.
-5. First run will auto-create `profiles.db` with a `default` profile.
-   Edit it in [DB Browser for SQLite](https://sqlitebrowser.org/) to
-   point at your character, mobs, maps and HUD.
+5. First run will auto-create `config.json` with default values. Open
+   it in any text editor and adjust at least:
+   - `server.window_title` / `server.process_name` to match your client,
+   - `profile.char_name` to match your character,
+   - `profile.mobs.allowed` / `profile.allowed_maps` for the farm spot.
 6. Launch the game, log in to your character, then:
 
 ```
-uv run ro-bot hunt --profile default
+uv run ro-bot hunt
 ```
+
+(Add `--config path/to/other.json` if you want multiple configs.)
 
 Hotkeys (global): `0` = quit, `p` = pause / resume.
 
@@ -28,7 +32,7 @@ Hotkeys (global): `0` = quit, `p` = pause / resume.
 |------|----------------|
 | [`docs/architecture.md`](docs/architecture.md) | Layers, dataflow, import direction |
 | [`docs/hunt-state-machine.md`](docs/hunt-state-machine.md) | Tick order, engagement FSM, policies |
-| [`docs/config-profiles.md`](docs/config-profiles.md) | SQLite schema, how to add / edit profiles |
+| [`docs/config-profiles.md`](docs/config-profiles.md) | JSON config schema, how to edit |
 | [`docs/memory-offsets.md`](docs/memory-offsets.md) | Player / entity memory offsets, research notes |
 | [`docs/packets.md`](docs/packets.md) | RO packet formats the sniffer parses |
 | [`docs/setup.md`](docs/setup.md) | Arduino firmware, Npcap, admin, first run |

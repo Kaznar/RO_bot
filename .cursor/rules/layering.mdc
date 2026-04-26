@@ -16,10 +16,10 @@ app  →  hunt  →  core
 
 - `ro_bot/core/**` MUST NOT import from `ro_bot.hunt` or `ro_bot.app`.
 - `ro_bot/hunt/**` MUST NOT import from `ro_bot.app`.
-- `ro_bot/hunt/**` MUST NOT import `sqlite3` (configuration arrives
-  as `HuntConfig`, not as a DB row).
-- `ro_bot/core/**` MUST NOT import `sqlite3`, `argparse`, or any
-  top-level profile concept.
+- `ro_bot/hunt/**` MUST NOT read config files directly (configuration
+  arrives as `HuntConfig`, not as a JSON dict).
+- `ro_bot/core/**` MUST NOT import `argparse` or touch any
+  top-level profile / config concept.
 
 ## Examples
 
@@ -28,9 +28,11 @@ app  →  hunt  →  core
 # src/ro_bot/core/window.py
 from ro_bot.hunt.config import HuntConfig
 
-# ❌ BAD — hunt reading the DB directly
+# ❌ BAD — hunt loading its own config
 # src/ro_bot/hunt/controller.py
-import sqlite3
+import json
+from pathlib import Path
+data = json.loads(Path("config.json").read_text())
 
 # ✅ GOOD — hunt takes already-hydrated dataclass
 # src/ro_bot/hunt/controller.py

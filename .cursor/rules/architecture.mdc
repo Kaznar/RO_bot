@@ -17,7 +17,7 @@ Server-agnostic low-level code. Memory RPM, HID, window handling,
 packet parsing, camera projection, tracking.
 
 - MUST NOT import `ro_bot.hunt.*` or `ro_bot.app.*`.
-- MUST NOT touch SQLite, argparse, or any profile concept.
+- MUST NOT touch config files, argparse, or any profile concept.
 - Examples: `core/memory/`, `core/network/`, `core/hid/`,
   `core/projection/`, `core/tracking/`, `core/window.py`.
 
@@ -26,15 +26,15 @@ packet parsing, camera projection, tracking.
 The tick loop, engagement FSM, targeting, heal, buffs, idle, escape.
 
 - MUST NOT import `ro_bot.app.*`.
-- MUST NOT import `sqlite3`.
+- MUST NOT read config files (JSON, TOML, YAML, …) directly.
 - Takes config as frozen dataclasses (`HuntConfig` and friends).
 - Policies are small modules in `hunt/policies/`, each with a
   single responsibility.
 
-## `app/` — profiles, SQLite, wiring
+## `app/` — config, profiles, wiring
 
-- Owns `schema.sql`, `migrations.py`, `seed.py`.
-- Owns models (`Server`, `Profile`) and repositories.
+- Owns `config/` (JSON loader + defaults).
+- Owns models (`Server`, `Profile`).
 - `app.session.BotSession` is the only place allowed to wire core
   + hunt together.
 - `cli.py` / `app.runner` are the entry points.
@@ -44,8 +44,10 @@ The tick loop, engagement FSM, targeting, heal, buffs, idle, escape.
 - New low-level primitive → `core/` + tests against mocks.
 - New hunting behavior → new module in `hunt/policies/` + hook it
   into `HuntController.tick()`.
-- New configurable value → add a column / table in `schema.sql`,
-  model field, repo hydration, `HuntConfig` field, policy use.
+- New configurable value → add a field to the relevant config
+  dataclass (`HuntConfig`, `EngagementConfig`, …), extend the
+  JSON loader in `app/config/loader.py`, bump the defaults in
+  `app/config/defaults.py`, consume it in the policy.
 
 See `docs/architecture.md` for diagrams and `docs/hunt-state-machine.md`
 for the tick pipeline.

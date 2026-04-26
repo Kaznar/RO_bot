@@ -10,8 +10,8 @@ Responsibilities:
     :class:`HuntController`.
 
 Takes the two layers' models and gives the runner a single object to
-drive. No SQLite, no argparse — those live in :mod:`runner` and
-:mod:`cli`.
+drive. No config-file reading, no argparse — those live in
+:mod:`runner` and :mod:`cli`.
 """
 
 from __future__ import annotations
@@ -81,8 +81,8 @@ class BotSession:
     def start(self) -> None:
         """Bring all components up. Raises on any init failure."""
         logger.info(
-            "Starting session for profile '%s' on server '%s'",
-            self._profile.name, self._profile.server.name,
+            "Starting session for char '%s' on server '%s'",
+            self._profile.char_name, self._profile.server.name,
         )
 
         self._rect = self._resolve_window()

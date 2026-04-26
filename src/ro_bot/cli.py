@@ -1,12 +1,13 @@
 """Command-line interface.
 
-Single subcommand for v1: ``hunt``. Profiles are edited externally
-(DB Browser for SQLite) so there are no CRUD subcommands.
+Single subcommand for v1: ``hunt``. Configuration is read from a JSON
+file (``config.json`` by default); there are no CRUD subcommands — edit
+the file in any text editor.
 
 Example::
 
-    ro-bot hunt --profile default
-    ro-bot hunt --profile default --db ./profiles.db
+    ro-bot hunt
+    ro-bot hunt --config ./myconfig.json
 """
 
 from __future__ import annotations
@@ -14,11 +15,11 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ro_bot.app.runner import run_hunt_for_profile
+from ro_bot.app.runner import run_hunt
 from ro_bot.core.elevation import ensure_admin
 from ro_bot.core.logging_setup import setup_hunt_logging, setup_root_logging
 
-DEFAULT_DB_PATH = "profiles.db"
+DEFAULT_CONFIG_PATH = "config.json"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -29,15 +30,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     hunt = subparsers.add_parser(
         "hunt",
-        help="Run the hunt loop for a configured profile.",
+        help="Run the hunt loop using the given config file.",
     )
     hunt.add_argument(
-        "--profile", required=True,
-        help="Profile name (column 'name' in the 'profile' table).",
-    )
-    hunt.add_argument(
-        "--db", default=DEFAULT_DB_PATH,
-        help=f"Path to profiles.db (default: {DEFAULT_DB_PATH}).",
+        "--config", default=DEFAULT_CONFIG_PATH,
+        help=f"Path to the JSON config file (default: {DEFAULT_CONFIG_PATH}).",
     )
     hunt.add_argument(
         "--no-elevate", action="store_true",
@@ -57,7 +54,7 @@ def main() -> int:
         setup_hunt_logging()
         if not args.no_elevate:
             ensure_admin()
-        return run_hunt_for_profile(db_path=args.db, profile_name=args.profile)
+        return run_hunt(config_path=args.config)
 
     return 2
 

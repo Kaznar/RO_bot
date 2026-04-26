@@ -62,14 +62,14 @@ left alone. If you need to re-flash, the key points are:
 3. In a new shell:
 
    ```
-   uv run ro-bot hunt --profile default
+   uv run ro-bot hunt
    ```
 
-   First run creates `profiles.db` in the CWD and seeds a `default`
-   profile + a default server row. Stop the bot (`0` key), open
-   `profiles.db` in DB Browser, fill in your character name, COM
-   port is detected automatically via the Arduino VID/PID, so just
-   edit mob lists, keys, and projection constants.
+   First run writes `config.json` to the CWD with sensible defaults.
+   Stop the bot (`0` key), open `config.json` in any text editor,
+   fill in your character name, window title, mob lists, keys, and
+   projection constants. COM port is detected automatically via the
+   Arduino VID/PID — no config entry needed.
 
 4. Relaunch. The bot will:
    - find the game window (matching `server.window_title`)
@@ -107,5 +107,6 @@ few seconds on login. Threshold is a fraction (`0.30`), not a
 percentage.
 
 ### Clicks miss by a fixed offset
-Edit `server_projection.camera_offset_x/y` — positive shifts the
-cursor right / down relative to the computed cell center.
+Edit `server.projection.camera_offset_x` / `camera_offset_y` in
+`config.json` — positive shifts the cursor right / down relative to
+the computed cell center.

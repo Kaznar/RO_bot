@@ -24,9 +24,11 @@ from ro_bot.core.window import WindowRect
 
 @dataclass(frozen=True)
 class CameraProjection:
-    """Per-server projection constants. Stored in SQLite
-    (``server_projection`` table) so swapping server or client
-    resolution doesn't require code changes.
+    """Per-server projection constants.
+
+    Supplied by the app layer (loaded from the JSON config). Swapping
+    server or client resolution is a config-only change — this class
+    stays immutable at runtime.
     """
     px_per_cell_x: float
     px_per_cell_y: float

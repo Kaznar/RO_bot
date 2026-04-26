@@ -1,9 +1,9 @@
 """Runtime-immutable hunt configuration.
 
-Built by the app layer from a SQLite profile (see
-``app.session.BotSession``). The hunt layer consumes it read-only; any
-change requires a restart. Keeping it frozen means the controller
-cannot accidentally drift config during a run.
+Built by the app layer from the loaded JSON profile (see
+``app.session.BotSession``). The hunt layer consumes it read-only;
+any change requires a restart. Keeping it frozen means the
+controller cannot accidentally drift config during a run.
 """
 
 from __future__ import annotations
@@ -62,9 +62,9 @@ class EngagementConfig:
 class HuntConfig:
     """All per-profile hunt settings.
 
-    Built from the SQLite profile in ``app.session.BotSession``. The
-    controller treats this as read-only; edit the DB + restart to
-    change any field.
+    Built from the JSON profile in ``app.session.BotSession``. The
+    controller treats this as read-only; edit ``config.json`` and
+    restart to change any field.
     """
     char_name: str
     allowed_names: frozenset[str] = field(default_factory=frozenset)

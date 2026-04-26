@@ -2,7 +2,8 @@
 
 These don't vary per profile or server — they're pure implementation
 tuning for the tick loop. Anything tunable by a hunter (thresholds,
-keys, mob lists) lives in :class:`HuntConfig` and comes from SQLite.
+keys, mob lists) lives in :class:`HuntConfig` and comes from the
+app-layer JSON config.
 """
 
 from __future__ import annotations

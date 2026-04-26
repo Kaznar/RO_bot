@@ -8,10 +8,7 @@ __pycache__/
 
 # Runtime
 *.log
-profiles.db
-profiles.db-journal
-profiles.db-wal
-profiles.db-shm
+config.json
 
 # IDE
 .idea/

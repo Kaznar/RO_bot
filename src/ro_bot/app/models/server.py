@@ -16,7 +16,6 @@ from ro_bot.hunt.dead_zones.zone import DeadZone
 @dataclass(frozen=True)
 class Server:
     """Everything hunt needs to know about a server+client build."""
-    id: int
     name: str
     process_name: str
     window_title: str

@@ -22,12 +22,9 @@ from ro_bot.hunt.config import (
 
 @dataclass(frozen=True)
 class Profile:
-    """Complete profile as read from SQLite, ready for session wiring."""
-    id: int
-    name: str
+    """Complete profile as read from the config file, ready for session wiring."""
     server: Server
     char_name: str
-    primary_map: str = ""
     allowed_mobs: frozenset[str] = field(default_factory=frozenset)
     dangerous_mobs: frozenset[str] = field(default_factory=frozenset)
     maps: frozenset[str] = field(default_factory=frozenset)
