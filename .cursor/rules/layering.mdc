@@ -1,0 +1,49 @@
+---
+description: Import direction rules between core / hunt / app
+globs: src/ro_bot/**/*.py
+alwaysApply: false
+---
+
+# Layering — import rules
+
+Dependency direction is strictly one-way:
+
+```
+app  →  hunt  →  core
+```
+
+## Hard rules
+
+- `ro_bot/core/**` MUST NOT import from `ro_bot.hunt` or `ro_bot.app`.
+- `ro_bot/hunt/**` MUST NOT import from `ro_bot.app`.
+- `ro_bot/hunt/**` MUST NOT import `sqlite3` (configuration arrives
+  as `HuntConfig`, not as a DB row).
+- `ro_bot/core/**` MUST NOT import `sqlite3`, `argparse`, or any
+  top-level profile concept.
+
+## Examples
+
+```python
+# ❌ BAD — core reaching up into hunt
+# src/ro_bot/core/window.py
+from ro_bot.hunt.config import HuntConfig
+
+# ❌ BAD — hunt reading the DB directly
+# src/ro_bot/hunt/controller.py
+import sqlite3
+
+# ✅ GOOD — hunt takes already-hydrated dataclass
+# src/ro_bot/hunt/controller.py
+from ro_bot.hunt.config import HuntConfig
+
+# ✅ GOOD — app wires hunt with core primitives
+# src/ro_bot/app/session.py
+from ro_bot.core.hid.arduino import ArduinoHidBridge
+from ro_bot.hunt.controller import HuntController
+```
+
+## Cross-cutting modules
+
+`logging` from stdlib is allowed everywhere. `ro_bot.core.logging_setup`
+may be called only from `app` / `cli` — not from inside `core` or
+`hunt` module bodies (don't configure logging at import time).

@@ -1,0 +1,62 @@
+---
+description: SQLite schema conventions for profiles / migrations
+globs: src/ro_bot/app/db/**
+alwaysApply: false
+---
+
+# SQLite profile storage
+
+Configuration lives in `profiles.db` (SQLite). The schema is
+**normalized** — no JSON blobs in columns.
+
+## Rules
+
+- **No JSON / pickled blobs.** Every value gets its own column or
+  its own row. If you'd store a list, you want a child table.
+- **One row per 1:1 sibling.** Policy configs (`profile_heal`,
+  `profile_engagement`, …) are 1:1 tables with
+  `profile_id PRIMARY KEY REFERENCES profile(id) ON DELETE CASCADE`.
+- **`ON DELETE CASCADE`** on every child table. Deleting a profile
+  must wipe its buffs, maps, mobs, and policy rows.
+- **`CHECK` constraints for enums.** Use
+  `CHECK (role IN ('allowed','dangerous'))` instead of separate
+  tables.
+- **`UNIQUE` constraints on natural keys.** Example:
+  `UNIQUE (profile_id, mob_name, role)` — you can't list the same
+  mob twice in the same role.
+- **Seconds, not ticks.** Every duration column is a `REAL` in
+  seconds. Consistent across all tables.
+
+## Migrations
+
+- Track schema version with `PRAGMA user_version`.
+- `src/ro_bot/app/db/migrations.py` runs pending migrations in
+  order on every startup.
+- v1 = initial schema (applies `schema.sql`).
+- v2+ = add a new SQL step in `migrations.py` that runs only when
+  `user_version < N`, then bumps it.
+- Never alter `schema.sql` in place after v1 ships — write a
+  migration step instead.
+
+## Good / bad examples
+
+```sql
+-- ❌ BAD — JSON blob
+CREATE TABLE profile_buff (
+  profile_id INTEGER,
+  buffs_json TEXT  -- "[{\"key\":\"F2\",\"interval\":60}, ...]"
+);
+
+-- ✅ GOOD — normalized
+CREATE TABLE profile_buff (
+  id           INTEGER PRIMARY KEY,
+  profile_id   INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  order_index  INTEGER NOT NULL,
+  key          TEXT NOT NULL,
+  interval_sec REAL NOT NULL,
+  UNIQUE (profile_id, key)
+);
+```
+
+See `docs/config-profiles.md` for the full table map and editing
+workflow (DB Browser for SQLite).

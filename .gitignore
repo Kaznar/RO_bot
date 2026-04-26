@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+.env
+
+# Runtime
+*.log
+profiles.db
+profiles.db-journal
+profiles.db-wal
+profiles.db-shm
+
+# IDE
+.idea/
+.vscode/

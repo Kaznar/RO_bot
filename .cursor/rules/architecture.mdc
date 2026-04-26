@@ -1,0 +1,51 @@
+---
+description: RO_bot three-layer architecture (app → hunt → core)
+alwaysApply: true
+---
+
+# Architecture
+
+Project has three layers with strict one-way dependencies:
+
+```
+app  →  hunt  →  core
+```
+
+## `core/` — I/O and domain primitives
+
+Server-agnostic low-level code. Memory RPM, HID, window handling,
+packet parsing, camera projection, tracking.
+
+- MUST NOT import `ro_bot.hunt.*` or `ro_bot.app.*`.
+- MUST NOT touch SQLite, argparse, or any profile concept.
+- Examples: `core/memory/`, `core/network/`, `core/hid/`,
+  `core/projection/`, `core/tracking/`, `core/window.py`.
+
+## `hunt/` — hunt feature logic
+
+The tick loop, engagement FSM, targeting, heal, buffs, idle, escape.
+
+- MUST NOT import `ro_bot.app.*`.
+- MUST NOT import `sqlite3`.
+- Takes config as frozen dataclasses (`HuntConfig` and friends).
+- Policies are small modules in `hunt/policies/`, each with a
+  single responsibility.
+
+## `app/` — profiles, SQLite, wiring
+
+- Owns `schema.sql`, `migrations.py`, `seed.py`.
+- Owns models (`Server`, `Profile`) and repositories.
+- `app.session.BotSession` is the only place allowed to wire core
+  + hunt together.
+- `cli.py` / `app.runner` are the entry points.
+
+## Adding features
+
+- New low-level primitive → `core/` + tests against mocks.
+- New hunting behavior → new module in `hunt/policies/` + hook it
+  into `HuntController.tick()`.
+- New configurable value → add a column / table in `schema.sql`,
+  model field, repo hydration, `HuntConfig` field, policy use.
+
+See `docs/architecture.md` for diagrams and `docs/hunt-state-machine.md`
+for the tick pipeline.

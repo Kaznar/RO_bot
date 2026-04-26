@@ -1,0 +1,43 @@
+---
+description: File size limits and how to split modules
+alwaysApply: true
+---
+
+# File size limits
+
+- **Soft limit: ~300 lines.** If a file crosses this, consider
+  splitting.
+- **Hard limit: 500 lines.** Files over 500 lines MUST be split.
+
+This is why we rewrote the project — the prototype's `attack.py`
+grew to 1462 lines and became unmaintainable.
+
+## How to split
+
+Split by **responsibility**, not by "first 200 lines / next 200 lines".
+
+- One module = one concept.
+- A class that holds orchestration + business rules + I/O is
+  three files, not one big file.
+- Prefer free functions for pure logic, classes only when state
+  or identity matters.
+
+## Examples from this codebase
+
+| Original | Split into |
+|----------|------------|
+| `memory.py` | `core/memory/{process,offsets,player_state,entity_scanner}.py` |
+| `network/packets.py` monolith | `core/network/{packets,parser}.py` |
+| `sniffer.py` (all iter + state) | `parser.py` (pure iter) + `sniffer.py` (state + thread) |
+| `attack.py` | `hunt/{controller,loop,config,event_bus,blacklist,cell_observer,aim_service,pause}.py` + `hunt/policies/{targeting,engagement,heal,buffs,idle_action,escape}.py` + `hunt/dead_zones/{zone,filter}.py` |
+
+## When adding code
+
+If your edit pushes a file past 300 lines:
+
+1. Identify concepts that can leave the module.
+2. Move them out into a new file in the same package.
+3. Update imports.
+4. Keep the original file as a thin orchestrator/re-export.
+
+Don't silently let files grow "just a bit more".
