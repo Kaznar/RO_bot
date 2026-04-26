@@ -61,7 +61,7 @@ app.runner.run_hunt_for_profile
   ├─ open_db / apply_migrations / seed_defaults
   ├─ ProfileRepository.get_by_name → Profile (+ Server)
   └─ BotSession(profile).start()
-       ├─ find_game_window + disable mouse accel
+       ├─ wait_for_game_window (poll up to 120s) + disable mouse accel
        ├─ ArduinoHidBridge.connect()
        ├─ PacketSniffer.connect()
        ├─ PlayerReader.connect() (OpenProcess + anchor scan)

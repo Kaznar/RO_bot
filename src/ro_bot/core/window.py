@@ -8,6 +8,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes
 import logging
+import time
 from dataclasses import dataclass
 
 import win32gui
@@ -60,6 +61,30 @@ def find_game_window(title_substring: str) -> int:
         "Found window: '%s' (hwnd=0x%X)", win32gui.GetWindowText(hwnd), hwnd,
     )
     return hwnd
+
+
+def wait_for_game_window(
+    title_substring: str,
+    timeout: float = 120.0,
+    poll_sec: float = 2.0,
+) -> int:
+    """Poll until a visible window matching ``title_substring`` appears.
+
+    Blocks up to ``timeout`` seconds, retrying every ``poll_sec``. Raises
+    ``RuntimeError`` if the deadline passes without a match — caller
+    treats that as a fatal startup error.
+    """
+    deadline = time.monotonic() + timeout
+    logger.info(
+        "Waiting for window '%s' (up to %.0fs)...", title_substring, timeout,
+    )
+    while True:
+        try:
+            return find_game_window(title_substring)
+        except RuntimeError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(poll_sec)
 
 
 def get_client_rect(hwnd: int) -> WindowRect:

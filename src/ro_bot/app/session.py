@@ -28,8 +28,8 @@ from ro_bot.core.tracking.entity_tracker import EntityTracker
 from ro_bot.core.window import (
     MouseAcceleration,
     WindowRect,
-    find_game_window,
     get_client_rect,
+    wait_for_game_window,
 )
 from ro_bot.hunt.aim_service import AimService
 from ro_bot.hunt.config import HuntConfig
@@ -117,7 +117,9 @@ class BotSession:
     # ── Build steps ─────────────────────────────────────────────────
 
     def _resolve_window(self) -> WindowRect:
-        hwnd = find_game_window(self._profile.server.window_title)
+        hwnd = wait_for_game_window(
+            self._profile.server.window_title, timeout=120.0,
+        )
         rect = get_client_rect(hwnd)
 
         mouse_accel = MouseAcceleration()
