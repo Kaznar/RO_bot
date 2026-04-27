@@ -190,6 +190,7 @@ def _parse_heal(data: Any, ctx: str) -> HealConfig | None:
         key=_req(data, "key", ctx, str),
         threshold_pct=_opt_num(data, "threshold_pct", ctx, default=0.30),
         cooldown_sec=_opt_num(data, "cooldown_sec", ctx, default=1.0),
+        min_hp=_opt_int(data, "min_hp", ctx, default=500),
     )
 
 
@@ -283,6 +284,17 @@ def _opt_num(data: dict, key: str, ctx: str, *, default: float) -> float:
             f"{ctx}.{key}: expected number, got {type(value).__name__}"
         )
     return float(value)
+
+
+def _opt_int(data: dict, key: str, ctx: str, *, default: int) -> int:
+    if key not in data:
+        return default
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(
+            f"{ctx}.{key}: expected int, got {type(value).__name__}"
+        )
+    return value
 
 
 def _parse_str_list(data: list, ctx: str) -> list[str]:

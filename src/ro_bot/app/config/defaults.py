@@ -53,6 +53,7 @@ DEFAULTS: dict[str, Any] = {
             "key": "q",
             "threshold_pct": 0.30,
             "cooldown_sec": 1.0,
+            "min_hp": 500,
         },
         "idle_action": {
             "key": "t",

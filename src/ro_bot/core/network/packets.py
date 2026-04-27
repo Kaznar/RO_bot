@@ -8,7 +8,8 @@ still emits:
     0x0080 — entity vanish (7 bytes)
     0x0087 — player movement (12 bytes)
     0x0091 — map change (22 bytes)
-    0x00B0 — status change / HP sync (8 bytes)
+    0x00B0 — status change / HP sync (8 bytes, 32-bit value)
+    0x0ACB — status change LONG (modern rAthena, 12 bytes, 64-bit value)
     0x0088 — entity stop-move / position (10 bytes)
 
 This module keeps only data shapes; parsing lives in
@@ -38,6 +39,7 @@ class PacketConfig:
     player_move: int = 0x0087
     map_change: int = 0x0091
     status_change: int = 0x00B0
+    status_change_long: int = 0x0ACB
     stop_move: int = 0x0088
 
 

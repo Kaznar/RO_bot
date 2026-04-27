@@ -5,8 +5,9 @@ Two flavors of parser:
 * :class:`PacketParser` for 0x0A30 (name + HP) because it needs regex
   matching on variable-length payload.
 * Module-level ``iter_*`` generators for the marker-scan packets
-  (0x0080, 0x0087, 0x0088, 0x0091, 0x00B0). Each walks the raw payload,
-  locates valid occurrences of its marker, and yields typed events.
+  (0x0080, 0x0087, 0x0088, 0x0091, 0x00B0, 0x0ACB). Each walks the raw
+  payload, locates valid occurrences of its marker, and yields typed
+  events.
 
 Keeping these separate from the sniffer keeps the sniffer focused on
 state + dispatch and keeps file sizes sane.
@@ -29,6 +30,38 @@ from ro_bot.core.network.packets import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Diagnostic probes (temporary) ────────────────────────────────────
+#
+# Per-opcode counters that cap how many raw packet dumps reach the log
+# when a parser can't extract what it expects. Pure telemetry — remove
+# once the NexusRO / Gepard packet variants are mapped.
+
+_PROBE_LIMIT_DEFAULT = 10
+# Status-change opcodes need a wider window: SP_MAXHP arrives only once
+# (or rarely) and may sit deeper in the stream than the first 10 hits.
+_PROBE_LIMITS: dict[str, int] = {
+    "0x00B0": 50,
+    "0x0ACB": 50,
+}
+_probe_counts: dict[str, int] = {}
+
+
+def _probe(tag: str) -> bool:
+    """Return True up to the per-tag probe limit, then False."""
+    limit = _PROBE_LIMITS.get(tag, _PROBE_LIMIT_DEFAULT)
+    n = _probe_counts.get(tag, 0)
+    if n >= limit:
+        return False
+    _probe_counts[tag] = n + 1
+    return True
+
+
+def _hex_window(data: bytes, idx: int, before: int = 4, after: int = 32) -> str:
+    lo = max(0, idx - before)
+    hi = min(len(data), idx + after)
+    return data[lo:hi].hex(" ")
 
 
 # ── 0x0087 ZC_NOTIFY_PLAYERMOVE helpers ──────────────────────────────
@@ -98,6 +131,13 @@ class PacketParser:
         if m is None:
             m = _HP_PATTERN_LOOSE.search(data[start_idx + 30:search_end])
         if m is None:
+            # Probe: show what the payload actually contains around the
+            # 0x0A30 marker. Cap via _probe() so it doesn't flood the log.
+            if _probe("0x0A30_nohp"):
+                logger.debug(
+                    "0x0A30 HP miss: hex=%s",
+                    _hex_window(data, start_idx, before=0, after=128),
+                )
             return 0, 0
         return int(m.group(1)), int(m.group(2))
 
@@ -180,8 +220,39 @@ def iter_status_change(data: bytes, cfg: PacketConfig) -> Iterator[StatusChange]
             break
         sp_type = struct.unpack_from("<h", data, idx + 2)[0]
         value = struct.unpack_from("<I", data, idx + 4)[0]
+        if _probe("0x00B0"):
+            logger.debug(
+                "0x00B0 hit: sp_type=%d value=%d hex=%s",
+                sp_type, value, _hex_window(data, idx),
+            )
         yield StatusChange(type=sp_type, value=value)
         offset = idx + 8
+
+
+def iter_status_change_long(
+    data: bytes, cfg: PacketConfig,
+) -> Iterator[StatusChange]:
+    """0x0ACB ZC_PAR_CHANGE_LONG: [opcode:2][sp_type:2][value:8]. 12 bytes.
+
+    Modern rAthena / client variant used when a stat value no longer fits
+    in 32 bits (e.g. HP over ~2.1 bln). If the server uses this form, the
+    legacy 0x00B0 cache stays empty — that's the symptom we're probing.
+    """
+    marker = struct.pack("<H", cfg.status_change_long)
+    offset = 0
+    while offset <= len(data) - 12:
+        idx = data.find(marker, offset)
+        if idx == -1 or idx + 12 > len(data):
+            break
+        sp_type = struct.unpack_from("<h", data, idx + 2)[0]
+        value = struct.unpack_from("<q", data, idx + 4)[0]
+        if _probe("0x0ACB"):
+            logger.debug(
+                "0x0ACB hit: sp_type=%d value=%d hex=%s",
+                sp_type, value, _hex_window(data, idx),
+            )
+        yield StatusChange(type=sp_type, value=value)
+        offset = idx + 12
 
 
 def iter_stopmove(data: bytes, cfg: PacketConfig) -> Iterator[tuple[int, int, int]]:

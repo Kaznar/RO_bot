@@ -36,6 +36,7 @@ from ro_bot.core.network.parser import (
     iter_map_change,
     iter_player_move,
     iter_status_change,
+    iter_status_change_long,
     iter_stopmove,
     iter_vanish,
 )
@@ -173,6 +174,11 @@ class PacketSniffer:
         self._player_lock = threading.Lock()
         self._map_name: str | None = None
 
+        # Diagnostic: every distinct sp_type seen on 0x00B0 / 0x0ACB.
+        # Used by HealPolicy to expose why hp_max stays at 0 (e.g. server
+        # never sent SP_MAXHP=6 because login predates the sniffer).
+        self._sp_types_seen: set[int] = set()
+
         self._sniff_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._connected = False
@@ -304,6 +310,16 @@ class PacketSniffer:
         with self._player_lock:
             return self._player_hp, self._player_hp_max
 
+    def get_sp_types_seen(self) -> frozenset[int]:
+        """Snapshot of every distinct sp_type observed on 0x00B0 / 0x0ACB.
+
+        Diagnostic hook for the heal policy: if SP_MAXHP (=6) is never
+        in this set, the server simply hasn't sent it on the captured
+        TCP stream (typical when the sniffer connects after login).
+        """
+        with self._player_lock:
+            return frozenset(self._sp_types_seen)
+
     def get_player_gid(self) -> int:
         return self._player_gid
 
@@ -374,6 +390,8 @@ class PacketSniffer:
         for m in iter_map_change(payload, self._pkt_cfg):
             self._on_map_change(m.map_name, m.x, m.y)
         for s in iter_status_change(payload, self._pkt_cfg):
+            self._on_status_change(s.type, s.value)
+        for s in iter_status_change_long(payload, self._pkt_cfg):
             self._on_status_change(s.type, s.value)
 
     # ── Event handlers ──────────────────────────────────────────────
@@ -449,11 +467,23 @@ class PacketSniffer:
             _safe_call(lst, map_name, x, y)
 
     def _on_status_change(self, sp_type: int, value: int) -> None:
+        first_max = False
         with self._player_lock:
+            is_first = sp_type not in self._sp_types_seen
+            self._sp_types_seen.add(sp_type)
             if sp_type == SP_HP:
                 self._player_hp = value
             elif sp_type == SP_MAXHP:
+                first_max = self._player_hp_max == 0 and value > 0
                 self._player_hp_max = value
+        # Log outside the lock; first-ever MAXHP is the milestone that
+        # unblocks healing, so surface it loudly.
+        if first_max:
+            logger.info("First SP_MAXHP received: max_hp=%d", value)
+        elif is_first:
+            logger.debug(
+                "First sighting sp_type=%d value=%d", sp_type, value,
+            )
 
     def _on_stopmove(self, gid: int, x: int, y: int) -> None:
         if gid == self._player_gid:
