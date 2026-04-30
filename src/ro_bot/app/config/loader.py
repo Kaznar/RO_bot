@@ -7,7 +7,7 @@ messages, and returns a fully-populated :class:`Profile` (with nested
 ``config.json`` transparently.
 
 All validation errors raise :class:`ConfigError` with a path-qualified
-message ("config.json: profile.heal.threshold_pct must be a number").
+message ("config.json: profile.heal.min_hp must be an int").
 """
 
 from __future__ import annotations
@@ -188,9 +188,8 @@ def _parse_heal(data: Any, ctx: str) -> HealConfig | None:
         raise ConfigError(f"{ctx}: must be a JSON object or omitted")
     return HealConfig(
         key=_req(data, "key", ctx, str),
-        threshold_pct=_opt_num(data, "threshold_pct", ctx, default=0.30),
+        min_hp=_req_int(data, "min_hp", ctx),
         cooldown_sec=_opt_num(data, "cooldown_sec", ctx, default=1.0),
-        min_hp=_opt_int(data, "min_hp", ctx, default=500),
     )
 
 

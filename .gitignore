@@ -8,7 +8,6 @@ __pycache__/
 
 # Runtime
 *.log
-config.json
 
 # IDE
 .idea/

@@ -12,7 +12,7 @@ state.
 tick():
   1. drain EventBus  → forget died / lost GIDs, reset on map change
   2. read player pos + HP_cur / HP_max
-  3. heal policy     (if HP% < threshold, press heal key)
+  3. heal policy     (if HP < min_hp, press heal key)
   4. buffs policy    (refresh each configured buff at its interval)
   5. escape policy   (if any mob from `dangerous` is visible → teleport)
   6. if engaged:
@@ -65,7 +65,7 @@ Constants live in `hunt/constants.py`; per-profile knobs live in
 
 | Policy | Inputs | Effect |
 |--------|--------|--------|
-| `heal` | sniffer HP, `HealConfig` | Presses heal key when `cur/max < threshold_pct`, respects `cooldown_sec`. |
+| `heal` | sniffer HP, `HealConfig` | Presses heal key when `hp < min_hp`, respects `cooldown_sec`. |
 | `buffs` | `list[BuffSpec]`, map name | Rotates buff presses on `interval_sec` each; skipped off-map. |
 | `idle_action` | last-candidate timestamp, last-kill timestamp | Presses teleport after `after_sec` idle or `after_kill_sec` post-kill. |
 | `escape` | sniffer snapshot, `dangerous` mob list | Teleports on first sight; cooldown prevents key spam. |

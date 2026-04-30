@@ -51,7 +51,6 @@ DEFAULTS: dict[str, Any] = {
         },
         "heal": {
             "key": "q",
-            "threshold_pct": 0.30,
             "cooldown_sec": 1.0,
             "min_hp": 500,
         },

@@ -1,17 +1,15 @@
-"""HP-threshold heal policy.
+"""Absolute-HP heal policy.
 
-Two thresholds, primary + fallback:
-
-* Primary: percentage of ``hp_max`` (``threshold_pct``). Used whenever
-  the sniffer has observed ``SP_MAXHP``.
-* Fallback: absolute HP floor (``min_hp``). Used only when ``hp_max``
-  is unknown (some private servers / Gepard builds never emit
-  ``SP_MAXHP=6``); set ``min_hp = 0`` to disable healing in that case.
+Heals whenever current HP drops below ``HealConfig.min_hp``. The
+sniffer's ``hp_max`` (from ``SP_MAXHP``) is shown in diagnostic logs
+when available but does not influence the heal decision.
 
 HP is sourced from the sniffer's 0x00B0 / 0x0ACB cache, which is
-authoritative on the server side. The memory `-0x2C50` slot is
+authoritative on the server side. The memory ``-0x2C50`` slot is
 unreliable (multiplexed with target HP) — see
 ``docs/memory-offsets.md``.
+
+``min_hp = 0`` disables the policy entirely (heal key never fires).
 """
 
 from __future__ import annotations
@@ -22,16 +20,13 @@ import time
 from ro_bot.core.hid.bridge import HidBridge
 from ro_bot.core.network.sniffer import PacketSniffer
 from ro_bot.hunt.config import HealConfig
-from ro_bot.hunt.constants import (
-    EMPTY_HP_CACHE_WARN_INTERVAL_SEC,
-    HP_SNAPSHOT_INTERVAL_SEC,
-)
+from ro_bot.hunt.constants import HP_SNAPSHOT_INTERVAL_SEC
 
 logger = logging.getLogger("ro_bot.hunt")
 
 
 class HealPolicy:
-    """Fire heal key when HP drops below threshold; log what it sees."""
+    """Fire heal key when HP drops below ``min_hp``; log what it sees."""
 
     def __init__(
         self,
@@ -46,7 +41,6 @@ class HealPolicy:
         self._allowed_maps = allowed_maps
         self._last_heal_at: float = 0.0
         self._last_snapshot_at: float = 0.0
-        self._last_empty_warn_at: float = 0.0
 
     def tick(self, now: float) -> None:
         """One policy iteration. Call every controller tick."""
@@ -55,72 +49,26 @@ class HealPolicy:
 
     def _log_snapshot(self, now: float) -> None:
         """Periodic INFO line showing what the policy currently sees."""
-        hp, hp_max = self._sniffer.get_player_hp()
-        max_unknown = hp_max <= 0
-
-        if max_unknown and self._cfg.min_hp <= 0 and (
-            now - self._last_empty_warn_at >= EMPTY_HP_CACHE_WARN_INTERVAL_SEC
-        ):
-            sp_types = sorted(self._sniffer.get_sp_types_seen())
-            logger.warning(
-                "Heal disabled: hp_max=0 and min_hp=0 (no fallback). "
-                "sp_types_seen=%s; heal will not fire",
-                sp_types,
-            )
-            self._last_empty_warn_at = now
-
         if now - self._last_snapshot_at < HP_SNAPSHOT_INTERVAL_SEC:
             return
         self._last_snapshot_at = now
 
+        hp, hp_max = self._sniffer.get_player_hp()
         map_name = self._sniffer.get_map_name() or "?"
         allowed = self._on_allowed_map()
+        hp_max_str = str(hp_max) if hp_max > 0 else "?"
+        reason = self._skip_reason(hp, allowed)
 
-        if max_unknown:
-            self._log_fallback_snapshot(hp, map_name, allowed)
-            return
-
-        ratio_pct = 100.0 * hp / hp_max
-        threshold_pct = self._cfg.threshold_pct * 100.0
-        reason = self._skip_reason_pct(hp, hp_max, allowed, threshold_pct)
         logger.info(
-            "HP snapshot: hp=%d/%d (%.1f%%) map=%s allowed=%s → %s",
-            hp, hp_max, ratio_pct, map_name, allowed, reason,
+            "HP snapshot: hp=%d/%s map=%s allowed=%s → %s",
+            hp, hp_max_str, map_name, allowed, reason,
         )
 
-    def _log_fallback_snapshot(
-        self, hp: int, map_name: str, allowed: bool,
-    ) -> None:
-        """Snapshot line when hp_max is unknown (absolute fallback mode)."""
-        sp_types = sorted(self._sniffer.get_sp_types_seen())
-        if hp <= 0:
-            logger.info(
-                "HP snapshot: hp=0/0 (cache empty) map=%s allowed=%s "
-                "sp_types=%s → skip",
-                map_name, allowed, sp_types,
-            )
-            return
-        reason = self._skip_reason_abs(hp, allowed)
-        logger.info(
-            "HP snapshot: hp=%d/? (max unknown, fallback min_hp=%d) "
-            "map=%s allowed=%s sp_types=%s → %s",
-            hp, self._cfg.min_hp, map_name, allowed, sp_types, reason,
-        )
-
-    def _skip_reason_pct(
-        self, hp: int, hp_max: int, allowed: bool, threshold_pct: float,
-    ) -> str:
+    def _skip_reason(self, hp: int, allowed: bool) -> str:
+        if self._cfg.min_hp <= 0:
+            return "skip: min_hp=0 (heal disabled)"
         if hp <= 0:
             return "skip: hp<=0 (dead/stale)"
-        if not allowed:
-            return "skip: map_not_allowed"
-        if hp / hp_max >= self._cfg.threshold_pct:
-            return f"skip: above_threshold (>={threshold_pct:.0f}%)"
-        return f"would_heal (<{threshold_pct:.0f}%)"
-
-    def _skip_reason_abs(self, hp: int, allowed: bool) -> str:
-        if self._cfg.min_hp <= 0:
-            return "skip: min_hp=0 (fallback disabled)"
         if not allowed:
             return "skip: map_not_allowed"
         if hp >= self._cfg.min_hp:
@@ -128,15 +76,11 @@ class HealPolicy:
         return f"would_heal (<{self._cfg.min_hp})"
 
     def _maybe_heal(self, now: float) -> None:
-        hp, hp_max = self._sniffer.get_player_hp()
-        if hp <= 0:
+        if self._cfg.min_hp <= 0:
             return
-        if hp_max > 0:
-            if hp / hp_max >= self._cfg.threshold_pct:
-                return
-        else:
-            if self._cfg.min_hp <= 0 or hp >= self._cfg.min_hp:
-                return
+        hp, hp_max = self._sniffer.get_player_hp()
+        if hp <= 0 or hp >= self._cfg.min_hp:
+            return
         if now - self._last_heal_at < self._cfg.cooldown_sec:
             return
         if not self._on_allowed_map():
@@ -149,18 +93,11 @@ class HealPolicy:
             )
             return
         self._last_heal_at = now
-        if hp_max > 0:
-            logger.warning(
-                "Heal: pressed '%s' (HP=%d/%d, %.1f%% < %.0f%%)",
-                self._cfg.key, hp, hp_max,
-                100.0 * hp / hp_max,
-                100.0 * self._cfg.threshold_pct,
-            )
-        else:
-            logger.warning(
-                "Heal: pressed '%s' (HP=%d/?, fallback min_hp=%d)",
-                self._cfg.key, hp, self._cfg.min_hp,
-            )
+        hp_max_str = str(hp_max) if hp_max > 0 else "?"
+        logger.warning(
+            "Heal: pressed '%s' (HP=%d/%s, threshold=%d)",
+            self._cfg.key, hp, hp_max_str, self._cfg.min_hp,
+        )
 
     def _on_allowed_map(self) -> bool:
         name = self._sniffer.get_map_name()
@@ -174,8 +111,6 @@ class HealPolicy:
             self._last_heal_at += delta
         if self._last_snapshot_at:
             self._last_snapshot_at += delta
-        if self._last_empty_warn_at:
-            self._last_empty_warn_at += delta
 
 
 def initial_time() -> float:

@@ -27,18 +27,18 @@ class BuffSpec:
 
 @dataclass(frozen=True)
 class HealConfig:
-    """Parameters for the HP-threshold heal policy.
+    """Parameters for the HP heal policy.
 
-    ``min_hp`` is an absolute fallback used only when the sniffer
-    cannot observe ``SP_MAXHP`` (some private servers / Gepard builds
-    never emit it). When ``hp_max == 0``, the policy heals as soon as
-    current HP drops below ``min_hp``. With a known ``hp_max`` the
-    percentage threshold takes over and ``min_hp`` is ignored.
+    The policy heals whenever the current HP drops below ``min_hp``
+    (an absolute value). ``hp_max`` from the sniffer is shown in
+    diagnostic logs but does not influence the heal decision.
+
+    Set ``min_hp = 0`` to disable healing entirely while keeping the
+    rest of the heal block (e.g. its key) configured.
     """
     key: str
-    threshold_pct: float = 0.30
+    min_hp: int
     cooldown_sec: float = 1.0
-    min_hp: int = 500
 
 
 @dataclass(frozen=True)

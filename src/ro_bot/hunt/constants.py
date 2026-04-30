@@ -20,6 +20,3 @@ NO_CANDIDATE_LOG_INTERVAL_SEC: float = 5.0
 # HP-snapshot INFO cadence (diagnostic line showing what the heal
 # policy currently sees).
 HP_SNAPSHOT_INTERVAL_SEC: float = 5.0
-
-# WARNING cadence for an empty sniffer HP cache (would disable healing).
-EMPTY_HP_CACHE_WARN_INTERVAL_SEC: float = 30.0

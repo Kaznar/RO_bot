@@ -61,7 +61,7 @@ and `profile.char_name`.
     },
     "heal": {
       "key": "q",
-      "threshold_pct": 0.30,
+      "min_hp": 500,
       "cooldown_sec": 1.0
     },
     "idle_action": {
@@ -116,7 +116,11 @@ All tunable timers in seconds. Defaults are conservative:
 
 - `key` — must match `KEY_CODES` in `core/hid/arduino.py` (e.g.
   `"F1"`, `"1"`, `" "`). Unknown keys fail at session start.
-- `threshold_pct` — float `0.0–1.0`.
+- `min_hp` — required int. Heal key fires when current HP drops
+  below this value. Set to `0` to keep the block configured but
+  disable the policy.
+- `cooldown_sec` — optional float, defaults to `1.0`. Minimum gap
+  between consecutive heal presses.
 
 Omit the whole `heal` block to disable the heal policy.
 

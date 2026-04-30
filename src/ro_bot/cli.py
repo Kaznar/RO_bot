@@ -50,10 +50,10 @@ def main() -> int:
     args = _build_parser().parse_args()
 
     if args.command == "hunt":
-        setup_root_logging()
-        setup_hunt_logging()
         if not args.no_elevate:
             ensure_admin()
+        setup_root_logging()
+        setup_hunt_logging()
         return run_hunt(config_path=args.config)
 
     return 2
