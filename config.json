@@ -41,7 +41,7 @@
     ]
   },
   "profile": {
-    "char_name": "JoJo",
+    "char_name": "M o n K",
     "allowed_maps": [
       "ein_fild09",
       "cmd_fild01",
@@ -49,7 +49,8 @@
       "moc_fild07",
       "moc_fild18",
       "gef_fild11",
-      "mjo_dun03"
+      "mjo_dun03",
+      "gld_fild03"
     ],
     "mobs": {
       "allowed": [
@@ -62,14 +63,17 @@
         "Goblin",
         "Goblin Archer",
         "Skeleton Worker",
-        "Cramp"
+        "Cramp",
+        "Orc Warrior"
       ],
       "dangerous": [
         "Hunter Fly",
         "Dragon Fly",
         "Garm Baby",
         "Knight of Windstorm",
-        "Goblin Leader"
+        "Goblin Leader",
+        "Orc Hero",
+        "High Orc"
       ]
     },
     "engagement": {
@@ -82,7 +86,7 @@
     "heal": {
       "key": "q",
       "cooldown_sec": 1.0,
-      "min_hp": 750
+      "min_hp": 400
     },
     "idle_action": {
       "key": "t",
