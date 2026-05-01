@@ -17,6 +17,7 @@ from ro_bot.hunt.config import (
     EscapeConfig,
     HealConfig,
     IdleActionConfig,
+    ReturnToFarmConfig,
 )
 
 
@@ -33,3 +34,4 @@ class Profile:
     idle_action: IdleActionConfig | None = None
     escape: EscapeConfig | None = None
     engagement: EngagementConfig = field(default_factory=EngagementConfig)
+    return_to_farm: ReturnToFarmConfig | None = None

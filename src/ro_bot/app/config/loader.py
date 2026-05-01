@@ -25,10 +25,13 @@ from ro_bot.hunt.config import (
     BuffSpec,
     EngagementConfig,
     EscapeConfig,
+    FarmTransition,
     HealConfig,
     IdleActionConfig,
+    ReturnToFarmConfig,
 )
 from ro_bot.hunt.dead_zones.zone import DeadZone
+from ro_bot.hunt.policies.return_to_farm import VALID_DIRECTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +164,9 @@ def _parse_profile(data: dict, *, server: Server, ctx: str) -> Profile:
         engagement=_parse_engagement(
             data.get("engagement"), f"{ctx}.engagement",
         ),
+        return_to_farm=_parse_return_to_farm(
+            data.get("return_to_farm"), f"{ctx}.return_to_farm",
+        ),
     )
 
 
@@ -216,6 +222,81 @@ def _parse_escape(data: Any, ctx: str) -> EscapeConfig | None:
     )
 
 
+def _parse_return_to_farm(data: Any, ctx: str) -> ReturnToFarmConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    defaults = ReturnToFarmConfig()
+    maps_data = data.get("maps")
+    if maps_data is None:
+        maps_data = {}
+    if not isinstance(maps_data, dict):
+        raise ConfigError(
+            f"{ctx}.maps: expected object of "
+            "{farm_map: {neighbor_map: direction}}"
+        )
+    transitions = _parse_farm_transitions(maps_data, f"{ctx}.maps")
+    return ReturnToFarmConfig(
+        walk_cells=_opt_int(
+            data, "walk_cells", ctx, default=defaults.walk_cells,
+        ),
+        settle_sec=_opt_num(
+            data, "settle_sec", ctx, default=defaults.settle_sec,
+        ),
+        retry_sec=_opt_num(
+            data, "retry_sec", ctx, default=defaults.retry_sec,
+        ),
+        max_retries=_opt_int(
+            data, "max_retries", ctx, default=defaults.max_retries,
+        ),
+        transitions=transitions,
+    )
+
+
+def _parse_farm_transitions(
+    data: dict, ctx: str,
+) -> tuple[FarmTransition, ...]:
+    seen_neighbors: dict[str, str] = {}
+    items: list[FarmTransition] = []
+    for farm_map, neighbors in data.items():
+        farm_ctx = f"{ctx}.{farm_map}"
+        if not isinstance(farm_map, str) or not farm_map:
+            raise ConfigError(f"{farm_ctx}: farm map key must be a non-empty string")
+        if not isinstance(neighbors, dict):
+            raise ConfigError(
+                f"{farm_ctx}: must be an object of {{neighbor_map: direction}}"
+            )
+        for neighbor, direction in neighbors.items():
+            n_ctx = f"{farm_ctx}.{neighbor}"
+            if not isinstance(neighbor, str) or not neighbor:
+                raise ConfigError(
+                    f"{n_ctx}: neighbor map key must be a non-empty string"
+                )
+            if not isinstance(direction, str):
+                raise ConfigError(
+                    f"{n_ctx}: direction must be a string"
+                )
+            if direction not in VALID_DIRECTIONS:
+                raise ConfigError(
+                    f"{n_ctx}: direction must be one of "
+                    f"{sorted(VALID_DIRECTIONS)} (got {direction!r})"
+                )
+            if neighbor in seen_neighbors:
+                raise ConfigError(
+                    f"{n_ctx}: neighbor '{neighbor}' already configured for "
+                    f"farm map '{seen_neighbors[neighbor]}' — a neighbor can "
+                    "only belong to one farm map"
+                )
+            seen_neighbors[neighbor] = farm_map
+            items.append(FarmTransition(
+                farm_map=farm_map,
+                neighbor_map=neighbor,
+                direction=direction,
+            ))
+    return tuple(items)
+
+
 def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
     if data is None:
         return EngagementConfig()
@@ -238,6 +319,14 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
         ),
         target_settle_sec=_opt_num(
             data, "target_settle_sec", ctx, default=defaults.target_settle_sec,
+        ),
+        stuck_timeout_threshold=_opt_int(
+            data, "stuck_timeout_threshold", ctx,
+            default=defaults.stuck_timeout_threshold,
+        ),
+        stuck_blacklist_sec=_opt_num(
+            data, "stuck_blacklist_sec", ctx,
+            default=defaults.stuck_blacklist_sec,
         ),
     )
 

@@ -44,6 +44,7 @@ from ro_bot.hunt.policies.engagement import EngagementMachine
 from ro_bot.hunt.policies.escape import EscapePolicy
 from ro_bot.hunt.policies.heal import HealPolicy
 from ro_bot.hunt.policies.idle_action import IdleActionPolicy
+from ro_bot.hunt.policies.return_to_farm import ReturnToFarmPolicy
 from ro_bot.hunt.policies.targeting import collect_candidates, pick_nearest
 
 logger = logging.getLogger("ro_bot.hunt")
@@ -94,6 +95,12 @@ class HuntController:
             EscapePolicy(cfg.escape, cfg.dangerous_names, bridge, sniffer)
             if cfg.escape is not None else None
         )
+        self._return_to_farm = (
+            ReturnToFarmPolicy(cfg.return_to_farm, aim, player_reader)
+            if cfg.return_to_farm is not None
+            and cfg.return_to_farm.transitions
+            else None
+        )
 
         self._dead_zone_filter = dead_zone_filter
 
@@ -101,6 +108,10 @@ class HuntController:
         self._kills = 0
         self._timeouts = 0
         self._last_no_candidate_log: float = 0.0
+        # Per-GID cumulative timeout counter (reset on kill / map change).
+        # Used to detect unreachable mobs that would otherwise loop in
+        # the short-blacklist → re-engage cycle forever.
+        self._stuck_counts: dict[int, int] = {}
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -163,6 +174,8 @@ class HuntController:
             self._idle.shift(delta)
         if self._escape is not None:
             self._escape.shift(delta)
+        if self._return_to_farm is not None:
+            self._return_to_farm.shift(delta)
         if self._last_no_candidate_log:
             self._last_no_candidate_log += delta
         logger.info("Resumed after %.1fs paused", delta)
@@ -204,6 +217,15 @@ class HuntController:
             self._handle_escape_tick()
             return
 
+        if self._return_to_farm is not None and self._return_to_farm.is_active():
+            if self._engagement.state.gid is not None:
+                # We may have engaged something on the farm map just
+                # before walking through the warp. Drop it — that GID
+                # isn't on this map anyway.
+                self._engagement.state.clear()
+            self._return_to_farm.tick(now)
+            return
+
         if self._engagement.state.gid is not None:
             if self._resolve_engaged(now, events.died_gids, events.lost_gids):
                 return
@@ -228,8 +250,11 @@ class HuntController:
         self._engagement.state.clear()
         self._blacklist.clear()
         self._cells.clear()
+        self._stuck_counts.clear()
         if self._idle is not None:
             self._idle.on_map_reset()
+        if self._return_to_farm is not None:
+            self._return_to_farm.on_map_change(map_name, time.monotonic())
 
     def _handle_escape_tick(self) -> None:
         # Danger takes priority; abandon any target without blacklisting
@@ -258,6 +283,7 @@ class HuntController:
                 "Target killed: gid=%d name='%s' after %.2fs (kills=%d)",
                 state.gid, state.name, duration, self._kills,
             )
+            self._stuck_counts.pop(state.gid, None)
             state.clear()
             if self._idle is not None:
                 self._idle.on_kill()
@@ -272,14 +298,29 @@ class HuntController:
         if now - state.engaged_at > self._cfg.engagement.kill_timeout_sec:
             duration = now - state.engaged_at
             self._timeouts += 1
-            logger.info(
-                "Target timeout: gid=%d name='%s' after %.2fs → "
-                "blacklist %.0fs (timeouts=%d)",
-                state.gid, state.name, duration,
-                self._cfg.engagement.blacklist_sec, self._timeouts,
-            )
             assert state.gid is not None
-            self._blacklist.add(state.gid, self._cfg.engagement.blacklist_sec)
+            gid = state.gid
+            count = self._stuck_counts.get(gid, 0) + 1
+            self._stuck_counts[gid] = count
+            threshold = self._cfg.engagement.stuck_timeout_threshold
+            is_stuck = threshold > 0 and count >= threshold
+            bl_sec = (
+                self._cfg.engagement.stuck_blacklist_sec if is_stuck
+                else self._cfg.engagement.blacklist_sec
+            )
+            if is_stuck:
+                logger.warning(
+                    "Stuck target: gid=%d name='%s' timeout #%d (>= %d) "
+                    "after %.2fs → long blacklist %.0fs",
+                    gid, state.name, count, threshold, duration, bl_sec,
+                )
+            else:
+                logger.info(
+                    "Target timeout: gid=%d name='%s' after %.2fs → "
+                    "blacklist %.0fs (timeouts=%d)",
+                    gid, state.name, duration, bl_sec, self._timeouts,
+                )
+            self._blacklist.add(gid, bl_sec)
             state.clear()
             if self._idle is not None:
                 self._idle.on_timeout()

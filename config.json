@@ -41,12 +41,14 @@
     ]
   },
   "profile": {
-    "char_name": "M o n K",
+    "char_name": "JoJo",
     "allowed_maps": [
       "ein_fild09",
       "cmd_fild01",
       "xmas_dun02",
+      "moc_fild06",
       "moc_fild07",
+      "moc_fild12",
       "moc_fild18",
       "gef_fild11",
       "mjo_dun03",
@@ -64,7 +66,8 @@
         "Goblin Archer",
         "Skeleton Worker",
         "Cramp",
-        "Orc Warrior"
+        "Orc Warrior",
+        "Picky"
       ],
       "dangerous": [
         "Hunter Fly",
@@ -77,11 +80,13 @@
       ]
     },
     "engagement": {
-      "kill_timeout_sec": 15.0,
-      "blacklist_sec": 10.0,
+      "kill_timeout_sec": 9.0,
+      "blacklist_sec": 5.0,
       "reaim_click_cooldown_sec": 0.3,
       "aim_settle_sec": 0.1,
-      "target_settle_sec": 2.5
+      "target_settle_sec": 2.0,
+      "stuck_timeout_threshold": 3,
+      "stuck_blacklist_sec": 300.0
     },
     "heal": {
       "key": "q",
@@ -90,8 +95,8 @@
     },
     "idle_action": {
       "key": "t",
-      "after_sec": 8.0,
-      "after_kill_sec": 1.5
+      "after_sec": 5.0,
+      "after_kill_sec": 1.0
     },
     "escape": {
       "key": "t",
@@ -108,6 +113,20 @@
         "key": "c",
         "interval_sec": 1200.0
       }
-    ]
+    ],
+    "return_to_farm": {
+      "walk_cells": 3,
+      "settle_sec": 1.5,
+      "retry_sec": 5.0,
+      "max_retries": 4,
+      "maps": {
+        "cmd_fild01": {
+          "beach_dun3": "right",
+          "cmd_fild03": "left",
+          "cmd_fild02": "up",
+          "um_fild03": "down"
+        }
+      }
+    }
   }
 }

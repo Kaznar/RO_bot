@@ -57,7 +57,9 @@ and `profile.char_name`.
       "blacklist_sec": 30.0,
       "reaim_click_cooldown_sec": 0.3,
       "aim_settle_sec": 0.10,
-      "target_settle_sec": 2.5
+      "target_settle_sec": 2.5,
+      "stuck_timeout_threshold": 3,
+      "stuck_blacklist_sec": 300.0
     },
     "heal": {
       "key": "q",
@@ -76,7 +78,20 @@ and `profile.char_name`.
     "buffs": [
       {"order": 1, "key": "f", "interval_sec": 1800.0},
       {"order": 2, "key": "c", "interval_sec": 1200.0}
-    ]
+    ],
+    "return_to_farm": {
+      "walk_cells": 10,
+      "settle_sec": 1.5,
+      "retry_sec": 5.0,
+      "max_retries": 4,
+      "maps": {
+        "cmd_fild01": {
+          "beach_dun3": "right",
+          "cmd_fild03": "left",
+          "cmd_fild02": "up"
+        }
+      }
+    }
   }
 }
 ```
@@ -111,6 +126,8 @@ All tunable timers in seconds. Defaults are conservative:
 | `reaim_click_cooldown_sec` | 0.3 | Min delay between consecutive clicks on same mob. |
 | `aim_settle_sec` | 0.10 | Sleep between cursor move and click. |
 | `target_settle_sec` | 2.5 | How long mob must sit in a cell before we click. |
+| `stuck_timeout_threshold` | 3 | Timeouts on the same GID (since last kill / map) before it is flagged as unreachable. `0` disables the check. |
+| `stuck_blacklist_sec` | 300.0 | Blacklist duration for a flagged "stuck" GID. Should be longer than `idle_action.after_sec` so the idle teleport can fire during the blacklist window. |
 
 ### `profile.heal`
 
@@ -157,6 +174,46 @@ List of `{order, key, interval_sec}` entries.
 - List of map names. Heal / buffs only fire when the current map
   name (from sniffer) is in this list. Prevents wasting potions on
   cities / safe zones.
+
+### `profile.return_to_farm`
+
+Walks back into a warp when the bot accidentally steps onto a
+neighbor map. Disabled (policy not created) if the block is omitted
+or `maps` is empty.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `walk_cells` | `10` | Distance in map cells to click from the player, in the configured direction. |
+| `settle_sec` | `1.5` | Delay after the map change before the first click (gives the client time to load player position). |
+| `retry_sec` | `5.0` | If still on the neighbor map after this many seconds, click again. |
+| `max_retries` | `4` | Maximum clicks before giving up (capped by the 4-step jitter sequence below). |
+| `maps` | `{}` | `farm_map → {neighbor_map: direction}` — one entry per neighbor. |
+
+**Retry jitter sequence.** Each retry aims at a slightly different
+cell so a warp that isn't perfectly under the base target still gets
+hit:
+
+1. Base — `walk_cells` straight along the direction.
+2. 1 cell to the **left** (CCW-rotated perpendicular from the walking direction).
+3. 1 cell to the **right** (CW-rotated perpendicular).
+4. `walk_cells + 1` straight along the direction.
+
+If `max_retries` is lower than 4, later variants simply don't fire.
+Higher values are capped at 4 (the sequence doesn't loop).
+
+Directions are `"left"` / `"right"` / `"up"` / `"down"` (compass on
+the map grid: `up` = +Y = north).
+
+Each `neighbor_map` must be unique across all farm maps — a map can
+only be a neighbor of one farm.
+
+**Notes:**
+
+- If you deliberately want to leave your farm map (e.g. to restock),
+  pause the bot first. Otherwise it will walk you straight back.
+- Neighbor maps should **not** be in `allowed_maps` — you don't want
+  heal / targeting firing while you're walking through them.
+- Escape (dangerous mob) still takes priority over the return walk.
 
 ## Editing workflow
 

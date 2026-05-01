@@ -48,6 +48,8 @@ DEFAULTS: dict[str, Any] = {
             "reaim_click_cooldown_sec": 0.3,
             "aim_settle_sec": 0.10,
             "target_settle_sec": 2.5,
+            "stuck_timeout_threshold": 3,
+            "stuck_blacklist_sec": 300.0,
         },
         "heal": {
             "key": "q",

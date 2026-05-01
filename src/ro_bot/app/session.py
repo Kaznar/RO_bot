@@ -201,5 +201,6 @@ class BotSession:
             heal=p.heal,
             idle_action=p.idle_action,
             escape=p.escape,
+            return_to_farm=p.return_to_farm,
             buffs=p.buffs,
         )
