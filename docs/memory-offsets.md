@@ -66,14 +66,21 @@ Heap-allocated entity structs have a fixed header:
 +96   int32   cell Y
 ```
 
-`entity_scanner.find_entity_addr(process, gid)`:
+`entity_scanner.find_entity_addrs_batch(process, gids)`:
 
 1. Iterates committed, readable, non-guard pages via
-   `VirtualQueryEx`.
-2. In each page scans for the 4 bytes of GID.
-3. Validates the hit by reading X,Y at `+92/+96` and checking they
+   `VirtualQueryEx` **once**, regardless of how many GIDs you pass.
+2. In each chunk scans for the 4 bytes of every requested GID
+   (per-target `bytes.find` is C-level and cheap; the dominant cost
+   is the underlying `ReadProcessMemory` I/O which happens only once).
+3. Validates each hit by reading X,Y at `+92/+96` and checking they
    are within `MAP_COORD_MIN..MAP_COORD_MAX` (1..500).
-4. Caches the address; next read is a single RPM.
+4. Returns `{gid: addr}` for the GIDs it could locate; missing GIDs
+   are simply absent from the dict.
+
+The single-pass design matters after a teleport — the sniffer emits
+a burst of 0x0A30 packets, and resolving them serially would multiply
+the ~1 s heap-scan latency by the burst size.
 
 `read_entity_pos(process, addr, expected_gid)` revalidates the GID
 on every call so we reject stale slots after the heap recycles.

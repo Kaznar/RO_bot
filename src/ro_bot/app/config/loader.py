@@ -320,13 +320,17 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
         target_settle_sec=_opt_num(
             data, "target_settle_sec", ctx, default=defaults.target_settle_sec,
         ),
-        stuck_timeout_threshold=_opt_int(
-            data, "stuck_timeout_threshold", ctx,
-            default=defaults.stuck_timeout_threshold,
+        path_stuck_min_dist=_opt_int(
+            data, "path_stuck_min_dist", ctx,
+            default=defaults.path_stuck_min_dist,
         ),
-        stuck_blacklist_sec=_opt_num(
-            data, "stuck_blacklist_sec", ctx,
-            default=defaults.stuck_blacklist_sec,
+        path_stuck_timeout_sec=_opt_num(
+            data, "path_stuck_timeout_sec", ctx,
+            default=defaults.path_stuck_timeout_sec,
+        ),
+        path_stuck_blacklist_sec=_opt_num(
+            data, "path_stuck_blacklist_sec", ctx,
+            default=defaults.path_stuck_blacklist_sec,
         ),
     )
 

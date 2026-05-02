@@ -1,8 +1,8 @@
 """Process attach + raw ReadProcessMemory primitives.
 
 One class: :class:`ProcessHandle`. It wraps OpenProcess, gives you
-``read_bytes`` / ``read_int32`` / ``scan_bytes`` / ``scan_int32_aligned``,
-and closes the handle on ``close``.
+``read_bytes`` / ``read_int32`` / ``scan_bytes`` /
+``scan_int32_aligned_multi``, and closes the handle on ``close``.
 
 Keeping these primitives here (instead of inside `PlayerReader` or
 `entity_scanner`) lets both consumers share one OS-level handle and
@@ -16,6 +16,7 @@ import ctypes.wintypes
 import logging
 import struct
 import time
+from collections.abc import Iterator
 
 from ro_bot.core.memory.offsets import (
     ENTITY_SCAN_MAX_ADDR,
@@ -148,37 +149,74 @@ class ProcessHandle:
     def scan_bytes(self, target: bytes) -> list[int]:
         """Scan every committed, readable user-space region for `target`.
 
-        Slower cousin of `scan_int32_aligned`. Use this for string
-        scans (e.g. character name anchor).
+        Use for unaligned byte sequences (e.g. character name anchor).
+        For aligned int32 lookups prefer ``scan_int32_aligned_multi``.
         """
-        return list(self._iter_matches(target, aligned=False, min_addr=0))
+        return [
+            addr for _, addr in self._iter_matches(
+                [target], aligned=False, min_addr=0,
+            )
+        ]
 
-    def scan_int32_aligned(self, value: int) -> list[int]:
-        """Scan committed memory for a 4-byte-aligned int32 == `value`.
+    def scan_int32_aligned_multi(
+        self,
+        values: set[int],
+        *,
+        range_hint: tuple[int, int] | None = None,
+    ) -> Iterator[tuple[int, int]]:
+        """Single-pass heap scan for any of the given 4-byte-aligned int32s.
 
-        Only hits at addresses ≥ `ENTITY_SCAN_MIN_ADDR` are kept so we
-        skip the PE / static region where the heap never lives.
+        Yields ``(value, address)`` for each occurrence. One walk over
+        the heap covers an arbitrary number of targets — per-chunk cost
+        scales with the target count (each via C-level ``bytes.find``),
+        but the dominant memory-read I/O happens only once.
+
+        ``range_hint`` clips the scan to ``[lo, hi)``. Callers use this
+        once they have learned where the entity slab lives, narrowing
+        a 2 GB walk into a few MB and cutting wall time by ~100×.
+        Without a hint the full heap above ``ENTITY_SCAN_MIN_ADDR`` is
+        scanned (cold-start behavior).
         """
-        target = struct.pack("<I", value & 0xFFFFFFFF)
-        return list(self._iter_matches(
-            target, aligned=True, min_addr=ENTITY_SCAN_MIN_ADDR,
-        ))
+        if not values:
+            return
+        masked = {v & 0xFFFFFFFF for v in values}
+        targets = [struct.pack("<I", v) for v in masked]
+        target_to_value = dict(zip(targets, masked, strict=True))
+        if range_hint is not None:
+            lo, hi = range_hint
+        else:
+            lo, hi = ENTITY_SCAN_MIN_ADDR, ENTITY_SCAN_MAX_ADDR
+        for target, addr in self._iter_matches(
+            targets, aligned=True, min_addr=lo, max_addr=hi,
+        ):
+            yield target_to_value[target], addr
 
     def _iter_matches(
-        self, target: bytes, *, aligned: bool, min_addr: int,
-    ):
-        """Yield absolute addresses where `target` occurs in readable pages.
+        self,
+        targets: list[bytes],
+        *,
+        aligned: bool,
+        min_addr: int,
+        max_addr: int = ENTITY_SCAN_MAX_ADDR,
+    ) -> Iterator[tuple[bytes, int]]:
+        """Yield ``(target, absolute_addr)`` for each occurrence of any
+        of ``targets`` in readable pages within ``[min_addr, max_addr)``.
 
-        If `aligned` is True, only offsets divisible by 4 are yielded
-        (for int32 scans).
+        If ``aligned`` is True, only offsets divisible by 4 are yielded
+        (for int32 scans). Targets must all have equal length when used
+        with aligned mode (true for our int32 case).
         """
+        if not targets:
+            return
         chunk_size = 0x10000
         mbi = _MEMORY_BASIC_INFORMATION()
         mbi_size = ctypes.sizeof(mbi)
-        addr = 0
-        tail_size = len(target) - 1
+        # Start at the window low bound so VirtualQueryEx skips regions
+        # below it (PE / static segments etc.).
+        addr = min_addr
+        tail_size = max(len(t) for t in targets) - 1
 
-        while addr < ENTITY_SCAN_MAX_ADDR:
+        while addr < max_addr:
             ret = kernel32.VirtualQueryEx(
                 self._handle, ctypes.c_void_p(addr),
                 ctypes.byref(mbi), mbi_size,
@@ -188,10 +226,13 @@ class ProcessHandle:
             base = mbi.BaseAddress or 0
             size = mbi.RegionSize
 
+            if base >= max_addr:
+                break
+
             if self._is_readable(mbi):
                 yield from self._scan_region(
-                    base, size, target, chunk_size, aligned, min_addr,
-                    tail_size,
+                    base, size, targets, chunk_size, aligned,
+                    min_addr, max_addr, tail_size,
                 )
 
             addr = base + size
@@ -207,13 +248,28 @@ class ProcessHandle:
         )
 
     def _scan_region(
-        self, base: int, size: int, target: bytes,
-        chunk_size: int, aligned: bool, min_addr: int, tail_size: int,
-    ):
-        offset = 0
+        self,
+        base: int,
+        size: int,
+        targets: list[bytes],
+        chunk_size: int,
+        aligned: bool,
+        min_addr: int,
+        max_addr: int,
+        tail_size: int,
+    ) -> Iterator[tuple[bytes, int]]:
+        # Clip the region to the [min_addr, max_addr) window so we
+        # don't read pages that fall outside the caller's range hint.
+        eff_start = max(base, min_addr)
+        eff_end = min(base + size, max_addr)
+        if eff_start >= eff_end:
+            return
+
+        offset = eff_start - base
+        end_offset = eff_end - base
         prev_tail = b""
-        while offset < size:
-            read_size = min(chunk_size, size - offset)
+        while offset < end_offset:
+            read_size = min(chunk_size, end_offset - offset)
             data = self.read_bytes(base + offset, read_size)
             if data is None:
                 prev_tail = b""
@@ -222,15 +278,18 @@ class ProcessHandle:
 
             search_data = prev_tail + data
             search_base = base + offset - len(prev_tail)
-            pos = 0
-            while True:
-                idx = search_data.find(target, pos)
-                if idx == -1:
-                    break
-                abs_addr = search_base + idx
-                if abs_addr >= min_addr and (not aligned or abs_addr % 4 == 0):
-                    yield abs_addr
-                pos = idx + 1
+
+            for target in targets:
+                pos = 0
+                while True:
+                    idx = search_data.find(target, pos)
+                    if idx == -1:
+                        break
+                    abs_addr = search_base + idx
+                    if (abs_addr >= min_addr
+                            and (not aligned or abs_addr % 4 == 0)):
+                        yield target, abs_addr
+                    pos = idx + 1
 
             if len(data) >= tail_size:
                 prev_tail = data[-tail_size:] if tail_size > 0 else b""

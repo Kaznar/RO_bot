@@ -40,10 +40,11 @@ from ro_bot.hunt.dead_zones.filter import DeadZoneFilter
 from ro_bot.hunt.event_bus import EventBus
 from ro_bot.hunt.pause import PauseToken
 from ro_bot.hunt.policies.buffs import BuffPolicy
-from ro_bot.hunt.policies.engagement import EngagementMachine
+from ro_bot.hunt.policies.engagement import EngagementMachine, TargetState
 from ro_bot.hunt.policies.escape import EscapePolicy
 from ro_bot.hunt.policies.heal import HealPolicy
 from ro_bot.hunt.policies.idle_action import IdleActionPolicy
+from ro_bot.hunt.policies.path_stuck import PathStuckPolicy
 from ro_bot.hunt.policies.return_to_farm import ReturnToFarmPolicy
 from ro_bot.hunt.policies.targeting import collect_candidates, pick_nearest
 
@@ -81,6 +82,7 @@ class HuntController:
             dead_zone_filter=dead_zone_filter,
             reaim_cooldown_sec=cfg.engagement.reaim_click_cooldown_sec,
         )
+        self._path_stuck = PathStuckPolicy(cfg.engagement, self._blacklist)
 
         self._heal = (
             HealPolicy(cfg.heal, bridge, sniffer, cfg.allowed_maps)
@@ -108,10 +110,10 @@ class HuntController:
         self._kills = 0
         self._timeouts = 0
         self._last_no_candidate_log: float = 0.0
-        # Per-GID cumulative timeout counter (reset on kill / map change).
-        # Used to detect unreachable mobs that would otherwise loop in
-        # the short-blacklist → re-engage cycle forever.
-        self._stuck_counts: dict[int, int] = {}
+        # Set by path-stuck abandonment; consumed once by the next
+        # candidate-selection pass to bypass idle grace when nothing
+        # else is reachable.
+        self._immediate_teleport_pending: bool = False
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -250,7 +252,7 @@ class HuntController:
         self._engagement.state.clear()
         self._blacklist.clear()
         self._cells.clear()
-        self._stuck_counts.clear()
+        self._immediate_teleport_pending = False
         if self._idle is not None:
             self._idle.on_map_reset()
         if self._return_to_farm is not None:
@@ -283,7 +285,6 @@ class HuntController:
                 "Target killed: gid=%d name='%s' after %.2fs (kills=%d)",
                 state.gid, state.name, duration, self._kills,
             )
-            self._stuck_counts.pop(state.gid, None)
             state.clear()
             if self._idle is not None:
                 self._idle.on_kill()
@@ -296,41 +297,37 @@ class HuntController:
             state.clear()
             return False
         if now - state.engaged_at > self._cfg.engagement.kill_timeout_sec:
-            duration = now - state.engaged_at
-            self._timeouts += 1
-            assert state.gid is not None
-            gid = state.gid
-            count = self._stuck_counts.get(gid, 0) + 1
-            self._stuck_counts[gid] = count
-            threshold = self._cfg.engagement.stuck_timeout_threshold
-            is_stuck = threshold > 0 and count >= threshold
-            bl_sec = (
-                self._cfg.engagement.stuck_blacklist_sec if is_stuck
-                else self._cfg.engagement.blacklist_sec
-            )
-            if is_stuck:
-                logger.warning(
-                    "Stuck target: gid=%d name='%s' timeout #%d (>= %d) "
-                    "after %.2fs → long blacklist %.0fs",
-                    gid, state.name, count, threshold, duration, bl_sec,
-                )
-            else:
-                logger.info(
-                    "Target timeout: gid=%d name='%s' after %.2fs → "
-                    "blacklist %.0fs (timeouts=%d)",
-                    gid, state.name, duration, bl_sec, self._timeouts,
-                )
-            self._blacklist.add(gid, bl_sec)
-            state.clear()
-            if self._idle is not None:
-                self._idle.on_timeout()
+            self._handle_kill_timeout(state, now)
             return False
 
         player_cell = self._read_player_cell()
         if player_cell is None:
             return True
+
+        if self._path_stuck.is_stuck(state, player_cell, now):
+            self._path_stuck.abandon(state, player_cell, now)
+            self._immediate_teleport_pending = True
+            if self._idle is not None:
+                self._idle.on_timeout()
+            return False
+
         self._engagement.continue_engagement(player_cell, now)
         return True
+
+    def _handle_kill_timeout(self, state: TargetState, now: float) -> None:
+        duration = now - state.engaged_at
+        self._timeouts += 1
+        assert state.gid is not None
+        bl_sec = self._cfg.engagement.blacklist_sec
+        logger.info(
+            "Target timeout: gid=%d name='%s' after %.2fs → "
+            "blacklist %.0fs (timeouts=%d)",
+            state.gid, state.name, duration, bl_sec, self._timeouts,
+        )
+        self._blacklist.add(state.gid, bl_sec)
+        state.clear()
+        if self._idle is not None:
+            self._idle.on_timeout()
 
     def _read_player_cell(self) -> tuple[int, int] | None:
         state = self._player_reader.read()
@@ -357,10 +354,17 @@ class HuntController:
         if not result.candidates:
             self._log_no_candidates(now, visible, result.blocked_by_dead_zone)
             # Mobs hidden behind the HUD: don't teleport — they'll walk out.
-            if self._idle is not None and result.blocked_by_dead_zone == 0:
+            if self._idle is None or result.blocked_by_dead_zone != 0:
+                self._immediate_teleport_pending = False
+                return
+            if self._immediate_teleport_pending:
+                self._idle.force_fire(now, "path stuck — no other candidates")
+                self._immediate_teleport_pending = False
+            else:
                 self._idle.tick(now)
             return
 
+        self._immediate_teleport_pending = False
         target = pick_nearest(player_cell, result.candidates)
         if self._idle is not None:
             self._idle.on_engaged()

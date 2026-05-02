@@ -72,9 +72,20 @@ class IdleActionPolicy:
         )
         if now - self._idle_since < interval:
             return
-        self._press(now)
+        elapsed = now - self._idle_since
+        suffix = " (post-kill grace)" if self._post_kill_grace else ""
+        self._fire(now, f"after {elapsed:.1f}s without candidates{suffix}")
 
-    def _press(self, now: float) -> None:
+    def force_fire(self, now: float, reason: str) -> None:
+        """Fire the key immediately, bypassing ``after_sec``.
+
+        Used by recovery flows (e.g. path-stuck) that already know
+        there is nothing reachable here and shouldn't pay the regular
+        idle grace.
+        """
+        self._fire(now, reason)
+
+    def _fire(self, now: float, reason: str) -> None:
         try:
             self._bridge.press_key(self._cfg.key)
         except Exception:
@@ -83,9 +94,7 @@ class IdleActionPolicy:
             )
             return
         logger.info(
-            "Idle action: pressed '%s' after %.1fs without candidates%s",
-            self._cfg.key, now - (self._idle_since or now),
-            " (post-kill grace)" if self._post_kill_grace else "",
+            "Idle action: pressed '%s' %s", self._cfg.key, reason,
         )
         self._idle_since = now
         self._post_kill_grace = False

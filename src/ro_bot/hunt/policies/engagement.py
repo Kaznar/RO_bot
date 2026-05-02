@@ -33,17 +33,26 @@ class TargetState:
     ``gid is None`` means "no target". Timestamps are monotonic. All
     timestamps are shifted on pause/resume — see
     :class:`EngagementMachine.shift`.
+
+    ``player_cell_at_engage`` and ``engage_dist`` are snapshots taken
+    when the engage click is sent, used by the path-stuck policy to
+    detect "player did not move toward a distant target → click was
+    rejected" (no shift needed: cell coords aren't time-based).
     """
     gid: int | None = None
     name: str | None = None
     engaged_at: float = 0.0
     last_aim_cell: tuple[int, int] | None = None
+    player_cell_at_engage: tuple[int, int] | None = None
+    engage_dist: int = 0
 
     def clear(self) -> None:
         self.gid = None
         self.name = None
         self.engaged_at = 0.0
         self.last_aim_cell = None
+        self.player_cell_at_engage = None
+        self.engage_dist = 0
 
     def shift(self, delta: float) -> None:
         if self.engaged_at:
@@ -78,14 +87,16 @@ class EngagementMachine:
     ) -> None:
         """Start attacking ``candidate``: aim, settle, click."""
         cell = (candidate.x, candidate.y)
+        dist = abs(cell[0] - player_cell[0]) + abs(cell[1] - player_cell[1])
         self.state.gid = candidate.gid
         self.state.name = candidate.name
         self.state.engaged_at = now
         self.state.last_aim_cell = cell
+        self.state.player_cell_at_engage = player_cell
+        self.state.engage_dist = dist
 
         self._aim.aim_and_click(player_cell, cell)
 
-        dist = abs(cell[0] - player_cell[0]) + abs(cell[1] - player_cell[1])
         logger.info(
             "Engage: gid=%d name='%s' map=(%d,%d) player=(%d,%d) dist=%d",
             candidate.gid, candidate.name, cell[0], cell[1],

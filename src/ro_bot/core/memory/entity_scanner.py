@@ -1,17 +1,21 @@
 """Entity struct lookup by GID.
 
 Each mob / player in the engine is a struct whose first int32 is its
-GID. Once we know a GID (from a sniffer 0x0A30 packet), we locate the
-struct on the heap and then read (X, Y) from `+ENTITY_POS_OFFSET`.
+GID. Once we know one or more GIDs (from sniffer 0x0A30 packets), we
+locate the structs on the heap and then read (X, Y) from
+``+ENTITY_POS_OFFSET``.
 
 Two public functions:
 
-    find_entity_addr(process, gid)   # ~1 second heap scan
-    read_entity_pos(process, addr, gid)  # ~5 µs, cache-friendly
+    find_entity_addrs_batch(process, gids)  # ~1 second heap scan, any N
+    read_entity_pos(process, addr, gid)     # ~5 µs, cache-friendly
 
-The design is such that you scan once per spawn and then poll the
-resulting address cheaply. See :mod:`ro_bot.core.tracking.entity_tracker`
-for the cache that ties the two together.
+Critical detail: ``find_entity_addrs_batch`` walks the heap **once**
+regardless of how many GIDs you pass in. This matters after a teleport
+when the sniffer emits a burst of 0x0A30 packets — resolving them one
+at a time would multiply latency by the burst size. See
+:mod:`ro_bot.core.tracking.entity_tracker` for the cache that drains
+the spawn queue greedily and feeds it through this function.
 """
 
 from __future__ import annotations
@@ -58,15 +62,38 @@ def read_entity_pos(
     return x, y
 
 
-def find_entity_addr(process: ProcessHandle, gid: int) -> int | None:
-    """Locate the canonical struct address for `gid`, or None.
+def find_entity_addrs_batch(
+    process: ProcessHandle,
+    gids: list[int],
+    *,
+    range_hint: tuple[int, int] | None = None,
+) -> dict[int, int]:
+    """Locate canonical struct addresses for every GID in `gids`.
 
-    Algorithm: scan the heap for `int32(gid)`, then for each hit verify
-    that `+ENTITY_POS_OFFSET` holds a plausible (X, Y). Takes ~1 second
-    in practice — callers should cache the result and only re-scan when
-    `read_entity_pos` returns None (slot recycled).
+    Single heap pass: covers any number of GIDs together. For each
+    int32 hit we verify that ``+ENTITY_POS_OFFSET`` holds a plausible
+    (X, Y); the first verifying address wins, later hits for the same
+    GID are ignored.
+
+    ``range_hint`` is forwarded to the underlying scan and limits the
+    heap walk to a learned window. The caller (``EntityTracker``) keeps
+    state and widens the hint as new addresses are observed.
+
+    Returns ``{gid: addr}`` containing only the GIDs that were
+    successfully located. Missing GIDs are left out (caller decides
+    whether to retry with a wider window).
     """
-    for hit in process.scan_int32_aligned(gid):
-        if read_entity_pos(process, hit, gid) is not None:
-            return hit
-    return None
+    if not gids:
+        return {}
+    pending: set[int] = set(gids)
+    found: dict[int, int] = {}
+    for value, hit in process.scan_int32_aligned_multi(
+        pending, range_hint=range_hint,
+    ):
+        if value in found:
+            continue
+        if read_entity_pos(process, hit, value) is not None:
+            found[value] = hit
+            if len(found) == len(pending):
+                break
+    return found

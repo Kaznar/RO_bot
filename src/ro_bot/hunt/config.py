@@ -103,20 +103,22 @@ class ReturnToFarmConfig:
 class EngagementConfig:
     """Tunables for the engage / re-aim state machine.
 
-    ``stuck_timeout_threshold`` counts cumulative timeouts on the same
-    GID since the last kill / map change. Once reached, the GID is
-    blacklisted for ``stuck_blacklist_sec`` instead of the usual
-    ``blacklist_sec`` so the idle-action timer can run out and trigger
-    a teleport (otherwise the short blacklist window keeps re-engaging
-    an unreachable mob forever). Set threshold ``<= 0`` to disable.
+    ``path_stuck_*`` controls early abandonment of unreachable distant
+    targets: if we engage a mob ``>= path_stuck_min_dist`` cells away
+    and the player has not moved a single cell within
+    ``path_stuck_timeout_sec``, the click was clearly rejected (path
+    blocked / mob already gone). Blacklist short and look for another
+    candidate immediately instead of waiting the full
+    ``kill_timeout_sec``. Set ``path_stuck_min_dist <= 0`` to disable.
     """
     kill_timeout_sec: float = 15.0
     blacklist_sec: float = 30.0
     reaim_click_cooldown_sec: float = 0.3
     aim_settle_sec: float = 0.10
     target_settle_sec: float = 2.5
-    stuck_timeout_threshold: int = 3
-    stuck_blacklist_sec: float = 300.0
+    path_stuck_min_dist: int = 5
+    path_stuck_timeout_sec: float = 1.5
+    path_stuck_blacklist_sec: float = 5.0
 
 
 @dataclass(frozen=True)

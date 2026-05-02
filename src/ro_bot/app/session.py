@@ -93,8 +93,17 @@ class BotSession:
         self._player_reader = self._start_memory()
 
         assert self._player_reader is not None
+        # Filter scanner queue to whitelisted mobs only. Non-allowed
+        # entities (Plants, NPCs, mobs of other classes) would otherwise
+        # consume scanner time (~1.3 s each, single-threaded) and starve
+        # us of allowed-mob positions for 5–8 s after a teleport burst.
+        # ``frozenset`` is captured by reference; the closure is called
+        # on the sniffer thread.
+        allowed = self._profile.allowed_mobs
         self._tracker = EntityTracker(
-            self._player_reader.process, self._sniffer,
+            self._player_reader.process,
+            self._sniffer,
+            should_track=lambda _gid, name: name in allowed,
         )
         self._tracker.start()
         self._stack.callback(self._tracker.stop)

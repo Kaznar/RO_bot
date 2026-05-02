@@ -52,7 +52,8 @@
       "moc_fild18",
       "gef_fild11",
       "mjo_dun03",
-      "gld_fild03"
+      "gld_fild03",
+      "gef_fild08"
     ],
     "mobs": {
       "allowed": [
@@ -67,7 +68,8 @@
         "Skeleton Worker",
         "Cramp",
         "Orc Warrior",
-        "Picky"
+        "Picky",
+        "Kobold"
       ],
       "dangerous": [
         "Hunter Fly",
@@ -85,8 +87,9 @@
       "reaim_click_cooldown_sec": 0.3,
       "aim_settle_sec": 0.1,
       "target_settle_sec": 2.0,
-      "stuck_timeout_threshold": 3,
-      "stuck_blacklist_sec": 300.0
+      "path_stuck_min_dist": 5,
+      "path_stuck_timeout_sec": 1.5,
+      "path_stuck_blacklist_sec": 5.0
     },
     "heal": {
       "key": "q",
@@ -95,7 +98,7 @@
     },
     "idle_action": {
       "key": "t",
-      "after_sec": 5.0,
+      "after_sec": 3.0,
       "after_kill_sec": 1.0
     },
     "escape": {

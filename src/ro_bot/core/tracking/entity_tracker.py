@@ -6,15 +6,18 @@ memory layer (``core.memory.entity_scanner``) so the bot can ask:
     tracker.get_position(gid) → (x, y) | None
 
 without doing a memory scan in the request path. Scans happen in a
-background worker thread, one GID at a time.
+background worker thread; pending spawns are drained greedily so a
+single heap pass resolves the whole burst at once.
 
 Three threads cooperate:
 
   * **Sniffer thread** — detects spawn / vanish / map_change. Callbacks
-    queue spawns, drop cache on vanish, clear cache + start grace
-    window on map_change.
-  * **Scanner thread** — consumes the spawn queue, runs the ~1 s
-    ``find_entity_addr`` scan, writes the result into the cache.
+    queue spawns (after the optional ``should_track`` filter), drop
+    cache on vanish, clear cache + start grace window on map_change.
+  * **Scanner thread** — coalesces queued spawns into a batch and runs
+    one ~1 s ``find_entity_addrs_batch`` scan that resolves every GID
+    in a single heap pass. Without batching, a 5-mob teleport burst
+    would take ~6.5 s before all positions were known.
   * **Caller thread** — reads ``get_position`` / ``get_all_positions``.
     One 100-byte ``ReadProcessMemory`` with defense against recycled
     slots and torn writes.
@@ -32,9 +35,13 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from ro_bot.core.memory.entity_scanner import find_entity_addr, read_entity_pos
+from ro_bot.core.memory.entity_scanner import (
+    find_entity_addrs_batch,
+    read_entity_pos,
+)
 from ro_bot.core.memory.process import ProcessHandle
 from ro_bot.core.network.sniffer import PacketSniffer
 
@@ -47,6 +54,13 @@ MAP_CHANGE_GRACE_SEC = 0.5
 # Upper bound on pending spawns. Dropped only if the player sprints
 # through dozens of mobs faster than the scanner can resolve them.
 SPAWN_QUEUE_MAX = 256
+
+# Padding around observed entity addresses for the adaptive scan
+# window. RO allocates entity structs in a slab — the live set spans
+# only a few MB even on a busy map. ±2 MB gives us headroom for slot
+# recycling and slab growth while still reducing the scan range from
+# the full 2 GB heap to ~4 MB (≈500× fewer chunks to walk).
+SCAN_RANGE_PADDING = 0x200000
 
 
 @dataclass
@@ -63,9 +77,15 @@ class EntityTracker:
         self,
         process: ProcessHandle,
         sniffer: PacketSniffer,
+        should_track: Callable[[int, str], bool] | None = None,
     ) -> None:
         self._process = process
         self._sniffer = sniffer
+        # Optional pre-queue filter. Called on the sniffer thread, so it
+        # must be cheap and thread-safe (typical use: closure over an
+        # immutable frozenset of allowed names). When None, every spawn
+        # is queued for memory resolution.
+        self._should_track = should_track
 
         self._cache: dict[int, _Entry] = {}
         self._lock = threading.Lock()
@@ -79,10 +99,17 @@ class EntityTracker:
         # Wall clock until which all reads return None.
         self._invalidate_until: float = 0.0
 
+        # Adaptive scan window — None on cold start, then learned from
+        # successful resolves. Owned and mutated by the scanner thread
+        # only; no lock needed. Persists across map changes (the entity
+        # slab in process memory does not move when the map switches).
+        self._scan_range: tuple[int, int] | None = None
+
         # Stats.
         self._scans_ok: int = 0
         self._scans_failed: int = 0
         self._dropped_spawns: int = 0
+        self._filtered_spawns: int = 0
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -108,8 +135,10 @@ class EntityTracker:
             self._scanner.join(timeout=2.0)
         self._scanner = None
         logger.info(
-            "EntityTracker stopped (scans ok=%d failed=%d dropped=%d)",
+            "EntityTracker stopped (scans ok=%d failed=%d dropped=%d "
+            "filtered=%d)",
             self._scans_ok, self._scans_failed, self._dropped_spawns,
+            self._filtered_spawns,
         )
 
     # ── Public API (caller thread) ───────────────────────────────────
@@ -161,6 +190,9 @@ class EntityTracker:
     # ── Sniffer callbacks (sniffer thread — must be quick) ──────────
 
     def _on_spawn(self, gid: int, name: str) -> None:
+        if self._should_track is not None and not self._should_track(gid, name):
+            self._filtered_spawns += 1
+            return
         try:
             self._spawn_q.put_nowait((gid, name))
         except queue.Full:
@@ -192,41 +224,125 @@ class EntityTracker:
     def _scanner_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                gid, name = self._spawn_q.get(timeout=0.5)
+                first = self._spawn_q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            self._try_resolve(gid, name)
+            # Greedy drain: coalesce everything else queued in the
+            # meantime. A teleport burst arrives in tens of ms, so this
+            # almost always picks up the whole burst on first wake.
+            batch: list[tuple[int, str]] = [first]
+            while True:
+                try:
+                    batch.append(self._spawn_q.get_nowait())
+                except queue.Empty:
+                    break
+            self._try_resolve_batch(batch)
 
-    def _try_resolve(self, gid: int, name: str) -> None:
-        # Honor map-change grace: requeue + short sleep.
+    def _try_resolve_batch(self, batch: list[tuple[int, str]]) -> None:
+        # Honor map-change grace: requeue and back off briefly.
         grace_left = self._invalidate_until - time.monotonic()
         if grace_left > 0:
-            try:
-                self._spawn_q.put_nowait((gid, name))
-            except queue.Full:
-                pass
+            for item in batch:
+                try:
+                    self._spawn_q.put_nowait(item)
+                except queue.Full:
+                    pass
             time.sleep(min(grace_left, 0.2))
             return
 
+        # Skip GIDs already cached (e.g. resolved by a previous batch
+        # whose scan was already in flight when the spawn was queued).
+        name_by_gid: dict[int, str] = {}
         with self._lock:
-            if gid in self._cache:
-                return
-
-        t0 = time.monotonic()
-        addr = find_entity_addr(self._process, gid)
-        dt = time.monotonic() - t0
-
-        if addr is None:
-            self._scans_failed += 1
-            logger.debug(
-                "Scanner: GID=%d '%s' not found (%.2fs)", gid, name, dt,
-            )
+            for gid, name in batch:
+                if gid not in self._cache:
+                    name_by_gid[gid] = name
+        if not name_by_gid:
             return
 
-        with self._lock:
-            self._cache[gid] = _Entry(gid_addr=addr, name=name)
-        self._scans_ok += 1
-        logger.debug(
-            "Scanner: GID=%d '%s' resolved at 0x%08X (%.2fs)",
-            gid, name, addr, dt,
+        gids = list(name_by_gid)
+        hint = self._scan_range
+
+        # Narrow scan first — a few MB walk instead of 2 GB once we
+        # know where the entity slab lives. Cold start (no hint) skips
+        # straight to the full scan.
+        t0 = time.monotonic()
+        addrs: dict[int, int] = {}
+        if hint is not None:
+            addrs = find_entity_addrs_batch(
+                self._process, gids, range_hint=hint,
+            )
+
+        # Fallback: any GID the narrow window missed (or every GID on
+        # cold start) gets a full-heap scan. This is also how the
+        # window self-heals when the slab grows beyond the learned
+        # bounds.
+        missing = [g for g in gids if g not in addrs]
+        used_fallback = bool(missing)
+        if missing:
+            full_addrs = find_entity_addrs_batch(
+                self._process, missing, range_hint=None,
+            )
+            addrs.update(full_addrs)
+        dt = time.monotonic() - t0
+
+        if addrs:
+            self._update_scan_range(addrs.values())
+            with self._lock:
+                for gid, addr in addrs.items():
+                    self._cache[gid] = _Entry(
+                        gid_addr=addr, name=name_by_gid[gid],
+                    )
+
+        n = len(name_by_gid)
+        scope = (
+            "full" if hint is None
+            else ("narrow+full" if used_fallback else "narrow")
         )
+        for gid, name in name_by_gid.items():
+            addr = addrs.get(gid)
+            if addr is not None:
+                self._scans_ok += 1
+                logger.debug(
+                    "Scanner: GID=%d '%s' resolved at 0x%08X "
+                    "(batch=%d, scope=%s, %.2fs)",
+                    gid, name, addr, n, scope, dt,
+                )
+            else:
+                self._scans_failed += 1
+                logger.debug(
+                    "Scanner: GID=%d '%s' not found "
+                    "(batch=%d, scope=%s, %.2fs)",
+                    gid, name, n, scope, dt,
+                )
+
+    def _update_scan_range(self, addresses: Iterable[int]) -> None:
+        """Learn / widen the scan window from a freshly resolved batch.
+
+        Called only from the scanner thread, so no lock is needed for
+        ``_scan_range``. Window only widens — slab regions don't move
+        in process memory once allocated.
+        """
+        observed_lo = min(addresses)
+        observed_hi = max(addresses)
+        new_lo = max(0, observed_lo - SCAN_RANGE_PADDING)
+        new_hi = observed_hi + SCAN_RANGE_PADDING
+        old = self._scan_range
+        if old is None:
+            self._scan_range = (new_lo, new_hi)
+            mb = (new_hi - new_lo) / (1024 * 1024)
+            logger.info(
+                "Scan range learned: 0x%08X-0x%08X (window=%.0fMB)",
+                new_lo, new_hi, mb,
+            )
+            return
+        old_lo, old_hi = old
+        merged_lo = min(old_lo, new_lo)
+        merged_hi = max(old_hi, new_hi)
+        if (merged_lo, merged_hi) != (old_lo, old_hi):
+            self._scan_range = (merged_lo, merged_hi)
+            mb = (merged_hi - merged_lo) / (1024 * 1024)
+            logger.info(
+                "Scan range widened: 0x%08X-0x%08X (window=%.0fMB)",
+                merged_lo, merged_hi, mb,
+            )

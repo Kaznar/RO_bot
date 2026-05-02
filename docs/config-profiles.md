@@ -58,8 +58,9 @@ and `profile.char_name`.
       "reaim_click_cooldown_sec": 0.3,
       "aim_settle_sec": 0.10,
       "target_settle_sec": 2.5,
-      "stuck_timeout_threshold": 3,
-      "stuck_blacklist_sec": 300.0
+      "path_stuck_min_dist": 5,
+      "path_stuck_timeout_sec": 1.5,
+      "path_stuck_blacklist_sec": 5.0
     },
     "heal": {
       "key": "q",
@@ -125,9 +126,10 @@ All tunable timers in seconds. Defaults are conservative:
 | `blacklist_sec` | 30.0 | How long a problematic GID is ignored. |
 | `reaim_click_cooldown_sec` | 0.3 | Min delay between consecutive clicks on same mob. |
 | `aim_settle_sec` | 0.10 | Sleep between cursor move and click. |
-| `target_settle_sec` | 2.5 | How long mob must sit in a cell before we click. |
-| `stuck_timeout_threshold` | 3 | Timeouts on the same GID (since last kill / map) before it is flagged as unreachable. `0` disables the check. |
-| `stuck_blacklist_sec` | 300.0 | Blacklist duration for a flagged "stuck" GID. Should be longer than `idle_action.after_sec` so the idle teleport can fire during the blacklist window. |
+| `target_settle_sec` | 2.5 | How long mob must sit in a cell before we click. Burst-walks (cell hops within 0.5 s) are merged so the timer counts from the start of a multi-cell burst. |
+| `path_stuck_min_dist` | 5 | Distance (cells) above which path-stuck detection arms. `0` disables. |
+| `path_stuck_timeout_sec` | 1.5 | If the player hasn't moved a single cell within this window after engaging a distant mob, the click was rejected — abandon the target early. |
+| `path_stuck_blacklist_sec` | 5.0 | Short blacklist after path-stuck abandonment. Followed by an immediate teleport when no other candidate is reachable. |
 
 ### `profile.heal`
 
