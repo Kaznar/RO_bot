@@ -24,6 +24,12 @@ from ro_bot.hunt.constants import HP_SNAPSHOT_INTERVAL_SEC
 
 logger = logging.getLogger("ro_bot.hunt")
 
+# Emergency self-save teleport when HP drops under 50% of configured
+# heal threshold. Kept intentionally fixed per user requirement.
+SAVE_MODE_KEY = "t"
+SAVE_MODE_RATIO = 0.5
+SAVE_MODE_COOLDOWN_SEC = 180.0
+
 
 class HealPolicy:
     """Fire heal key when HP drops below ``min_hp``; log what it sees."""
@@ -43,11 +49,14 @@ class HealPolicy:
         self._manual_control_maps = manual_control_maps
         self._all_maps = all_maps
         self._last_heal_at: float = 0.0
+        self._last_save_tp_at: float = 0.0
         self._last_snapshot_at: float = 0.0
 
     def tick(self, now: float) -> None:
         """One policy iteration. Call every controller tick."""
         self._log_snapshot(now)
+        if self._maybe_save_teleport(now):
+            return
         self._maybe_heal(now)
 
     def _log_snapshot(self, now: float) -> None:
@@ -102,6 +111,40 @@ class HealPolicy:
             self._cfg.key, hp, hp_max_str, self._cfg.min_hp,
         )
 
+    def _maybe_save_teleport(self, now: float) -> bool:
+        """Emergency teleport when HP is critically low.
+
+        Trigger condition: ``hp < min_hp * 0.5``.
+        Cooldown is independent from heal cooldown so repeated low-HP
+        periods cannot spam teleport key presses.
+        """
+        if self._cfg.min_hp <= 0:
+            return False
+        hp, hp_max = self._sniffer.get_player_hp()
+        if hp <= 0:
+            return False
+        if not self._consumables_ok():
+            return False
+        critical_hp = int(self._cfg.min_hp * SAVE_MODE_RATIO)
+        if hp >= critical_hp:
+            return False
+        if now - self._last_save_tp_at < SAVE_MODE_COOLDOWN_SEC:
+            return False
+        try:
+            self._bridge.press_key(SAVE_MODE_KEY)
+        except Exception:
+            logger.exception(
+                "HID press_key('%s') failed (save mode)", SAVE_MODE_KEY,
+            )
+            return False
+        self._last_save_tp_at = now
+        hp_max_str = str(hp_max) if hp_max > 0 else "?"
+        logger.warning(
+            "Save mode: pressed '%s' (HP=%d/%s, trigger<%d, cooldown=%.0fs)",
+            SAVE_MODE_KEY, hp, hp_max_str, critical_hp, SAVE_MODE_COOLDOWN_SEC,
+        )
+        return True
+
     def _consumables_ok(self) -> bool:
         name = self._sniffer.get_map_name()
         if name is None:
@@ -114,6 +157,8 @@ class HealPolicy:
         """Pause/resume: slide all timestamps by ``delta``."""
         if self._last_heal_at:
             self._last_heal_at += delta
+        if self._last_save_tp_at:
+            self._last_save_tp_at += delta
         if self._last_snapshot_at:
             self._last_snapshot_at += delta
 

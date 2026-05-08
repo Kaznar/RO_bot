@@ -97,6 +97,18 @@ class ReturnToFarmPolicy:
         self._active: _ActiveReturn | None = None
         self._given_up_on: str | None = None
 
+    def _resolve_transition(self, map_name: str) -> FarmTransition | None:
+        """Pick the transition for the current map, if any."""
+        active = self._cfg.active_farm_map
+        if active:
+            if map_name == active:
+                return None
+            for t in self._cfg.transitions:
+                if t.neighbor_map == map_name and t.farm_map == active:
+                    return t
+            return None
+        return self._by_neighbor.get(map_name)
+
     # ── Public API ──────────────────────────────────────────────────
 
     def is_active(self) -> bool:
@@ -105,7 +117,7 @@ class ReturnToFarmPolicy:
 
     def on_map_change(self, map_name: str, now: float) -> None:
         """Called from the controller for every map change event."""
-        transition = self._by_neighbor.get(map_name)
+        transition = self._resolve_transition(map_name)
         if transition is None:
             # Left the neighbor (either back to farm or somewhere new).
             if self._active is not None:

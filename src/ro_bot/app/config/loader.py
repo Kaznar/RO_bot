@@ -321,6 +321,15 @@ def _parse_return_to_farm(data: Any, ctx: str) -> ReturnToFarmConfig | None:
             "{farm_map: {neighbor_map: direction}}"
         )
     transitions = _parse_farm_transitions(maps_data, f"{ctx}.maps")
+    active_raw = data.get("active_farm_map")
+    if active_raw is None or active_raw == "":
+        active_farm_map = None
+    elif not isinstance(active_raw, str):
+        raise ConfigError(
+            f"{ctx}.active_farm_map: expected string or omitted",
+        )
+    else:
+        active_farm_map = active_raw.strip() or None
     return ReturnToFarmConfig(
         walk_cells=_opt_int(
             data, "walk_cells", ctx, default=defaults.walk_cells,
@@ -335,6 +344,7 @@ def _parse_return_to_farm(data: Any, ctx: str) -> ReturnToFarmConfig | None:
             data, "max_retries", ctx, default=defaults.max_retries,
         ),
         transitions=transitions,
+        active_farm_map=active_farm_map,
     )
 
 

@@ -191,6 +191,7 @@ or `maps` is empty.
 | `settle_sec` | `1.5` | Delay after the map change before the first click (gives the client time to load player position). |
 | `retry_sec` | `5.0` | If still on the neighbor map after this many seconds, click again. |
 | `max_retries` | `4` | Maximum clicks before giving up (capped by the 4-step jitter sequence below). |
+| `active_farm_map` | omitted | When set (e.g. `um_fild03`), only walk-backs **toward that farm map** run: you must land on a map listed as its neighbor in `maps`. Standing on `active_farm_map` never arms return — so you can list both `cmd_fild01` and `um_fild03` as farms with edges between them. Switch this value when you move farming to another map. |
 | `maps` | `{}` | `farm_map → {neighbor_map: direction}` — one entry per neighbor. |
 
 **Retry jitter sequence.** Each retry aims at a slightly different

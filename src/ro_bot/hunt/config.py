@@ -102,12 +102,23 @@ class ReturnToFarmConfig:
       4. ``walk_cells + 1`` along the direction.
 
     Attempts beyond step 4 disarm the policy with a warning.
+
+    ``active_farm_map`` (optional) fixes ambiguity when several farm maps
+    share neighbors (e.g. ``cmd_fild01`` ↔ ``um_fild03``). Only transitions
+    whose ``farm_map`` equals this value are considered: walk-back runs when
+    you land on a **neighbor** of that farm, and never when the current map
+    **is** that farm. Omit or leave empty for legacy behavior (single global
+    lookup by neighbor name — fragile if one neighbor appears in multiple
+    blocks).
     """
     walk_cells: int = 10
     settle_sec: float = 1.5
     retry_sec: float = 5.0
     max_retries: int = 4
     transitions: tuple[FarmTransition, ...] = ()
+    #: When set, only return toward this farm map; standing on this map
+    #: never arms walk-back.
+    active_farm_map: str | None = None
 
 
 @dataclass(frozen=True)
