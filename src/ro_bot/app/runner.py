@@ -18,7 +18,12 @@ from ro_bot.hunt.loop import run_hunt_loop
 logger = logging.getLogger(__name__)
 
 
-def run_hunt(config_path: str | Path) -> int:
+def run_hunt(
+    config_path: str | Path,
+    *,
+    hunt_all: bool = False,
+    selected_mobs: list[str] | None = None,
+) -> int:
     """Load the config from ``config_path`` and run the hunt loop.
 
     Returns a process exit code (0 on clean stop, 1 on init / config failure).
@@ -35,7 +40,11 @@ def run_hunt(config_path: str | Path) -> int:
         path, profile.char_name, profile.server.name,
     )
 
-    session = BotSession(profile)
+    session = BotSession(
+        profile,
+        hunt_all=hunt_all,
+        selected_mobs=selected_mobs,
+    )
     try:
         session.start()
     except Exception:

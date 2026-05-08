@@ -10,6 +10,25 @@ from __future__ import annotations
 
 from typing import Any
 
+# Exact ``PacketSniffer`` map ids — full automation suspended on these
+# maps (manual player control).
+DEFAULT_MANUAL_CONTROL_MAPS: list[str] = [
+    "alberta",
+    "payon",
+    "morocc",
+    "prontera",
+    "izlude",
+    "geffen",
+    "aldebaran",
+    "yuno",
+    "umbala",
+    "comodo",
+    "niflheim",
+    "einbroch",
+    "lighthalzen",
+    "hugel",
+]
+
 DEFAULTS: dict[str, Any] = {
     "server": {
         "name": "nexusro",
@@ -35,13 +54,14 @@ DEFAULTS: dict[str, Any] = {
     },
     "profile": {
         "char_name": "JoJo",
-        "allowed_maps": ["ein_fild09", "cmd_fild01", "xmas_dun02"],
+        "manual_control_maps": list(DEFAULT_MANUAL_CONTROL_MAPS),
         "mobs": {
             "allowed": ["Muka", "Porcellio", "Metaling",
                         "Alligator", "Myst Case"],
             "dangerous": ["Hunter Fly", "Dragon Fly", "Garm Baby",
                           "Knight of Windstorm"],
         },
+        "aim_offsets": [],
         "engagement": {
             "kill_timeout_sec": 15.0,
             "blacklist_sec": 30.0,
@@ -51,6 +71,7 @@ DEFAULTS: dict[str, Any] = {
             "path_stuck_min_dist": 5,
             "path_stuck_timeout_sec": 1.5,
             "path_stuck_blacklist_sec": 5.0,
+            "dead_zone_wait_sec": 3.0,
         },
         "heal": {
             "key": "q",

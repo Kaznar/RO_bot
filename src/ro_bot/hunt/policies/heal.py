@@ -33,12 +33,15 @@ class HealPolicy:
         cfg: HealConfig,
         bridge: HidBridge,
         sniffer: PacketSniffer,
-        allowed_maps: frozenset[str],
+        manual_control_maps: frozenset[str],
+        *,
+        all_maps: bool = False,
     ) -> None:
         self._cfg = cfg
         self._bridge = bridge
         self._sniffer = sniffer
-        self._allowed_maps = allowed_maps
+        self._manual_control_maps = manual_control_maps
+        self._all_maps = all_maps
         self._last_heal_at: float = 0.0
         self._last_snapshot_at: float = 0.0
 
@@ -55,22 +58,22 @@ class HealPolicy:
 
         hp, hp_max = self._sniffer.get_player_hp()
         map_name = self._sniffer.get_map_name() or "?"
-        allowed = self._on_allowed_map()
+        ok = self._consumables_ok()
         hp_max_str = str(hp_max) if hp_max > 0 else "?"
-        reason = self._skip_reason(hp, allowed)
+        reason = self._skip_reason(hp, ok)
 
         logger.info(
-            "HP snapshot: hp=%d/%s map=%s allowed=%s → %s",
-            hp, hp_max_str, map_name, allowed, reason,
+            "HP snapshot: hp=%d/%s map=%s consumables_ok=%s → %s",
+            hp, hp_max_str, map_name, ok, reason,
         )
 
-    def _skip_reason(self, hp: int, allowed: bool) -> str:
+    def _skip_reason(self, hp: int, consumables_ok: bool) -> str:
         if self._cfg.min_hp <= 0:
             return "skip: min_hp=0 (heal disabled)"
         if hp <= 0:
             return "skip: hp<=0 (dead/stale)"
-        if not allowed:
-            return "skip: map_not_allowed"
+        if not consumables_ok:
+            return "skip: manual_control_map (automation disabled)"
         if hp >= self._cfg.min_hp:
             return f"skip: above_min_hp (>={self._cfg.min_hp})"
         return f"would_heal (<{self._cfg.min_hp})"
@@ -83,7 +86,7 @@ class HealPolicy:
             return
         if now - self._last_heal_at < self._cfg.cooldown_sec:
             return
-        if not self._on_allowed_map():
+        if not self._consumables_ok():
             return
         try:
             self._bridge.press_key(self._cfg.key)
@@ -99,11 +102,13 @@ class HealPolicy:
             self._cfg.key, hp, hp_max_str, self._cfg.min_hp,
         )
 
-    def _on_allowed_map(self) -> bool:
+    def _consumables_ok(self) -> bool:
         name = self._sniffer.get_map_name()
         if name is None:
             return False
-        return name in self._allowed_maps
+        if self._all_maps:
+            return True
+        return name not in self._manual_control_maps
 
     def shift(self, delta: float) -> None:
         """Pause/resume: slide all timestamps by ``delta``."""

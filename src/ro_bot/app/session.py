@@ -16,6 +16,7 @@ drive. No config-file reading, no argparse — those live in
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from contextlib import ExitStack
 
@@ -52,9 +53,21 @@ class BotSession:
             session.stop()
     """
 
-    def __init__(self, profile: Profile) -> None:
+    def __init__(
+        self,
+        profile: Profile,
+        *,
+        hunt_all: bool = False,
+        selected_mobs: list[str] | None = None,
+    ) -> None:
         self._profile = profile
+        self._hunt_all = hunt_all
+        self._selected_mobs = (
+            frozenset(selected_mobs) if selected_mobs else None
+        )
         self._stack = ExitStack()
+        if self._hunt_all and self._selected_mobs is not None:
+            raise ValueError("hunt_all and selected_mobs cannot be combined")
 
         # Populated by start(); None between __init__ and start().
         self._bridge: HidBridge | None = None
@@ -99,11 +112,19 @@ class BotSession:
         # us of allowed-mob positions for 5–8 s after a teleport burst.
         # ``frozenset`` is captured by reference; the closure is called
         # on the sniffer thread.
-        allowed = self._profile.allowed_mobs
+        if self._hunt_all:
+            should_track = None
+        else:
+            allowed = (
+                self._selected_mobs
+                if self._selected_mobs is not None
+                else self._profile.allowed_mobs
+            )
+            should_track = lambda _gid, name: name in allowed
         self._tracker = EntityTracker(
             self._player_reader.process,
             self._sniffer,
-            should_track=lambda _gid, name: name in allowed,
+            should_track=should_track,
         )
         self._tracker.start()
         self._stack.callback(self._tracker.stop)
@@ -182,6 +203,7 @@ class BotSession:
             projection=self._profile.server.projection,
             rect=rect,
             aim_settle_sec=cfg.engagement.aim_settle_sec,
+            aim_offsets=cfg.aim_offsets,
         )
         dead_zone_filter = DeadZoneFilter(
             zones=cfg.dead_zones,
@@ -200,12 +222,17 @@ class BotSession:
 
     def _build_hunt_config(self) -> HuntConfig:
         p = self._profile
-        return HuntConfig(
+        cfg = HuntConfig(
             char_name=p.char_name,
-            allowed_names=p.allowed_mobs,
+            allowed_names=(
+                self._selected_mobs
+                if self._selected_mobs is not None
+                else p.allowed_mobs
+            ),
             dangerous_names=p.dangerous_mobs,
-            allowed_maps=p.maps,
+            manual_control_maps=p.manual_control_maps,
             dead_zones=p.server.dead_zones,
+            aim_offsets=p.aim_offsets,
             engagement=p.engagement,
             heal=p.heal,
             idle_action=p.idle_action,
@@ -213,3 +240,11 @@ class BotSession:
             return_to_farm=p.return_to_farm,
             buffs=p.buffs,
         )
+        if self._hunt_all:
+            return dataclasses.replace(
+                cfg,
+                target_all_mobs=True,
+                ignore_map_restrictions=True,
+                return_to_farm=None,
+            )
+        return cfg

@@ -17,11 +17,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ro_bot.app.config.defaults import DEFAULTS
+from ro_bot.app.config.defaults import DEFAULTS, DEFAULT_MANUAL_CONTROL_MAPS
 from ro_bot.app.models.profile import Profile
 from ro_bot.app.models.server import Server
 from ro_bot.core.projection.camera import CameraProjection
 from ro_bot.hunt.config import (
+    AimOffsetSpec,
     BuffSpec,
     EngagementConfig,
     EscapeConfig,
@@ -145,16 +146,50 @@ def _parse_profile(data: dict, *, server: Server, ctx: str) -> Profile:
         _req(mobs, "dangerous", f"{ctx}.mobs", list),
         f"{ctx}.mobs.dangerous",
     )
-    maps = _parse_str_list(
-        _req(data, "allowed_maps", ctx, list),
-        f"{ctx}.allowed_maps",
+    if "allowed_maps" in data:
+        logger.warning(
+            "%s: key 'allowed_maps' is ignored — use "
+            "'manual_control_maps'.",
+            ctx,
+        )
+    manual_raw = data.get("manual_control_maps")
+    legacy_raw = data.get("consumables_blocked_maps")
+    if manual_raw is not None and legacy_raw is not None:
+        raise ConfigError(
+            f"{ctx}: use only one of 'manual_control_maps' or "
+            "'consumables_blocked_maps' (legacy alias), not both",
+        )
+    selected = manual_raw if manual_raw is not None else legacy_raw
+    selected_key = (
+        "manual_control_maps"
+        if manual_raw is not None
+        else "consumables_blocked_maps"
+    )
+    if selected is None:
+        selected = DEFAULT_MANUAL_CONTROL_MAPS
+        selected_key = "manual_control_maps"
+    elif not isinstance(selected, list):
+        raise ConfigError(
+            f"{ctx}.{selected_key}: expected array or omitted",
+        )
+    if manual_raw is None and legacy_raw is not None:
+        logger.warning(
+            "%s: key 'consumables_blocked_maps' is deprecated — "
+            "rename to 'manual_control_maps'",
+            ctx,
+        )
+    manual_control_maps = frozenset(
+        _parse_str_list(selected, f"{ctx}.{selected_key}"),
     )
     return Profile(
         server=server,
         char_name=_req(data, "char_name", ctx, str),
         allowed_mobs=frozenset(allowed_mobs),
         dangerous_mobs=frozenset(dangerous_mobs),
-        maps=frozenset(maps),
+        manual_control_maps=manual_control_maps,
+        aim_offsets=_parse_aim_offsets(
+            data.get("aim_offsets"), f"{ctx}.aim_offsets",
+        ),
         buffs=_parse_buffs(
             _req(data, "buffs", ctx, list), f"{ctx}.buffs",
         ),
@@ -185,6 +220,55 @@ def _parse_buffs(data: list, ctx: str) -> tuple[BuffSpec, ...]:
         ))
     items.sort(key=lambda pair: pair[0])
     return tuple(spec for _order, spec in items)
+
+
+def _parse_aim_offsets(data: Any, ctx: str) -> tuple[AimOffsetSpec, ...]:
+    if data is None:
+        return ()
+    if not isinstance(data, list):
+        raise ConfigError(f"{ctx}: must be a JSON array or omitted")
+    out: list[AimOffsetSpec] = []
+    seen: set[str] = set()
+    for i, entry in enumerate(data):
+        item_ctx = f"{ctx}[{i}]"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{item_ctx}: must be a JSON object")
+        y_off = _req_num(entry, "y_offset_cells", item_ctx)
+        names_raw = entry.get("names")
+        name_single = entry.get("name")
+        if names_raw is not None:
+            if not isinstance(names_raw, list):
+                raise ConfigError(f"{item_ctx}.names: must be a JSON array")
+            group = _parse_str_list(names_raw, f"{item_ctx}.names")
+            if not group:
+                raise ConfigError(f"{item_ctx}.names: must be non-empty")
+            for n in group:
+                if n in seen:
+                    raise ConfigError(
+                        f"{item_ctx}.names: duplicate mob name {n!r}",
+                    )
+                seen.add(n)
+            out.append(AimOffsetSpec(
+                names=frozenset(group), y_offset_cells=y_off,
+            ))
+        elif name_single is not None:
+            if not isinstance(name_single, str) or not name_single:
+                raise ConfigError(
+                    f"{item_ctx}.name: must be a non-empty string",
+                )
+            if name_single in seen:
+                raise ConfigError(
+                    f"{item_ctx}.name: duplicate mob {name_single!r}",
+                )
+            seen.add(name_single)
+            out.append(AimOffsetSpec(
+                names=frozenset((name_single,)), y_offset_cells=y_off,
+            ))
+        else:
+            raise ConfigError(
+                f"{item_ctx}: need 'names' (array) or legacy 'name' (string)",
+            )
+    return tuple(out)
 
 
 def _parse_heal(data: Any, ctx: str) -> HealConfig | None:
@@ -331,6 +415,10 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
         path_stuck_blacklist_sec=_opt_num(
             data, "path_stuck_blacklist_sec", ctx,
             default=defaults.path_stuck_blacklist_sec,
+        ),
+        dead_zone_wait_sec=_opt_num(
+            data, "dead_zone_wait_sec", ctx,
+            default=defaults.dead_zone_wait_sec,
         ),
     )
 

@@ -38,7 +38,7 @@ class CameraProjection:
     def map_to_screen(
         self,
         player_cell: tuple[int, int],
-        mob_cell: tuple[int, int],
+        mob_cell: tuple[float, float],
         rect: WindowRect,
     ) -> tuple[int, int]:
         """Return absolute screen pixel for ``mob_cell`` under this projection."""

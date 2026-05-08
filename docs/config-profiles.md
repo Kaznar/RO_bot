@@ -47,7 +47,7 @@ and `profile.char_name`.
   },
   "profile": {
     "char_name": "JoJo",
-    "allowed_maps": ["ein_fild09", "cmd_fild01"],
+    "manual_control_maps": ["prontera", "payon"],
     "mobs": {
       "allowed": ["Muka", "Porcellio"],
       "dangerous": ["Hunter Fly"]
@@ -171,11 +171,13 @@ List of `{order, key, interval_sec}` entries.
 - `allowed` — whitelist. Everything else on screen is ignored.
 - `dangerous` — `escape` policy teleports immediately on sight.
 
-### `profile.allowed_maps`
+### `profile.manual_control_maps`
 
-- List of map names. Heal / buffs only fire when the current map
-  name (from sniffer) is in this list. Prevents wasting potions on
-  cities / safe zones.
+- List of map names where automation is suspended.
+- On these maps the hunt controller behaves like pause: no attack, no
+  teleport, no heal/buff presses, no return-to-farm walk.
+- Use this for towns, market maps, and any place where you want full
+  manual control.
 
 ### `profile.return_to_farm`
 
@@ -213,8 +215,8 @@ only be a neighbor of one farm.
 
 - If you deliberately want to leave your farm map (e.g. to restock),
   pause the bot first. Otherwise it will walk you straight back.
-- Neighbor maps should **not** be in `allowed_maps` — you don't want
-  heal / targeting firing while you're walking through them.
+- Neighbor maps should usually be listed in `manual_control_maps` if
+  you want to navigate there manually without bot actions.
 - Escape (dangerous mob) still takes priority over the return walk.
 
 ## Editing workflow

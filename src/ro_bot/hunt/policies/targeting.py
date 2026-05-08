@@ -37,6 +37,7 @@ def collect_candidates(
     visible: list[tuple[int, str, int, int]],
     *,
     allowed_names: frozenset[str],
+    target_all_mobs: bool,
     blacklist: Blacklist,
     cell_observer: CellObserver,
     dead_zone_filter: DeadZoneFilter,
@@ -47,7 +48,7 @@ def collect_candidates(
     """Filter ``visible`` into clickable candidates.
 
     Filters (in order, cheapest first):
-      1. name in whitelist
+      1. name in whitelist (skipped when ``target_all_mobs``)
       2. gid not in blacklist
       3. sniffer says still alive
       4. cell has been settled for ``target_settle_sec``
@@ -60,7 +61,7 @@ def collect_candidates(
     candidates: list[Candidate] = []
     blocked = 0
     for gid, name, _x, _y in visible:
-        if name not in allowed_names:
+        if not target_all_mobs and name not in allowed_names:
             continue
         if gid in blacklist:
             continue

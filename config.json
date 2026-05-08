@@ -42,18 +42,21 @@
   },
   "profile": {
     "char_name": "JoJo",
-    "allowed_maps": [
-      "ein_fild09",
-      "cmd_fild01",
-      "xmas_dun02",
-      "moc_fild06",
-      "moc_fild07",
-      "moc_fild12",
-      "moc_fild18",
-      "gef_fild11",
-      "mjo_dun03",
-      "gld_fild03",
-      "gef_fild08"
+    "manual_control_maps": [
+      "alberta",
+      "payon",
+      "morocc",
+      "prontera",
+      "izlude",
+      "geffen",
+      "aldebaran",
+      "yuno",
+      "umbala",
+      "comodo",
+      "niflheim",
+      "einbroch",
+      "lighthalzen",
+      "hugel"
     ],
     "mobs": {
       "allowed": [
@@ -68,7 +71,7 @@
         "Skeleton Worker",
         "Cramp",
         "Orc Warrior",
-        "Picky",
+        "Peco Peco",
         "Kobold"
       ],
       "dangerous": [
@@ -81,8 +84,19 @@
         "High Orc"
       ]
     },
+    "aim_offsets": [
+      {
+        "names": [
+          "Goblin Steamrider",
+          "Steam Goblin",
+          "Rideword",
+          "Petite"
+        ],
+        "y_offset_cells": 1.5
+      }
+    ],
     "engagement": {
-      "kill_timeout_sec": 9.0,
+      "kill_timeout_sec": 12.0,
       "blacklist_sec": 5.0,
       "reaim_click_cooldown_sec": 0.3,
       "aim_settle_sec": 0.1,
@@ -93,8 +107,8 @@
     },
     "heal": {
       "key": "q",
-      "cooldown_sec": 1.0,
-      "min_hp": 400
+      "cooldown_sec": 0.2,
+      "min_hp": 1000
     },
     "idle_action": {
       "key": "t",
@@ -128,6 +142,13 @@
           "cmd_fild03": "left",
           "cmd_fild02": "up",
           "um_fild03": "down"
+        },
+        "moc_fild02": {
+          "pay_gld": "left",
+          "moc_fild03": "up",
+          "moc_fild13": "up",
+          "moc_fild01": "down",
+          "pay_fild04": "down"
         }
       }
     }

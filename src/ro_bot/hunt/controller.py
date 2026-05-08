@@ -85,10 +85,22 @@ class HuntController:
         self._path_stuck = PathStuckPolicy(cfg.engagement, self._blacklist)
 
         self._heal = (
-            HealPolicy(cfg.heal, bridge, sniffer, cfg.allowed_maps)
+            HealPolicy(
+                cfg.heal,
+                bridge,
+                sniffer,
+                cfg.manual_control_maps,
+                all_maps=cfg.ignore_map_restrictions,
+            )
             if cfg.heal is not None else None
         )
-        self._buffs = BuffPolicy(cfg.buffs, bridge, sniffer, cfg.allowed_maps)
+        self._buffs = BuffPolicy(
+            cfg.buffs,
+            bridge,
+            sniffer,
+            cfg.manual_control_maps,
+            all_maps=cfg.ignore_map_restrictions,
+        )
         self._idle = (
             IdleActionPolicy(cfg.idle_action, bridge)
             if cfg.idle_action is not None else None
@@ -114,6 +126,13 @@ class HuntController:
         # candidate-selection pass to bypass idle grace when nothing
         # else is reachable.
         self._immediate_teleport_pending: bool = False
+        # When only dead-zone-blocked mobs are visible, give them a short
+        # grace window to walk out, then allow idle teleport anyway.
+        self._dead_zone_blocked_since: float | None = None
+        # Active while on a map from manual_control_maps.
+        # In this mode the hunt loop behaves like pause: no attack, no TP,
+        # no policy actions. Player controls movement manually.
+        self._manual_control_map: str | None = None
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -126,11 +145,14 @@ class HuntController:
         self._buffs.install()
         self._installed = True
         logger.info(
-            "HuntController installed: char='%s' allowed=%s maps=%s "
+            "HuntController installed: char='%s' allowed=%s manual_control_maps=%s "
+            "target_all_mobs=%s ignore_map_restrictions=%s "
             "timeout=%.1fs blacklist=%.0fs dead_zones=%d",
             self._cfg.char_name,
             sorted(self._cfg.allowed_names),
-            sorted(self._cfg.allowed_maps),
+            sorted(self._cfg.manual_control_maps),
+            self._cfg.target_all_mobs,
+            self._cfg.ignore_map_restrictions,
             self._cfg.engagement.kill_timeout_sec,
             self._cfg.engagement.blacklist_sec,
             len(self._cfg.dead_zones),
@@ -180,6 +202,8 @@ class HuntController:
             self._return_to_farm.shift(delta)
         if self._last_no_candidate_log:
             self._last_no_candidate_log += delta
+        if self._dead_zone_blocked_since is not None:
+            self._dead_zone_blocked_since += delta
         logger.info("Resumed after %.1fs paused", delta)
 
     # ── Tick interval ───────────────────────────────────────────────
@@ -200,15 +224,20 @@ class HuntController:
             return
 
         now = time.monotonic()
-
-        if self._heal is not None:
-            self._heal.tick(now)
-        self._buffs.tick(now)
-
         events = self._events.drain()
         if events.map_reset:
             self._handle_map_reset()
             return
+
+        current_map = self._sniffer.get_map_name() or "?"
+        if self._is_manual_control_map(current_map):
+            self._enter_manual_control_mode(current_map)
+            return
+        self._leave_manual_control_mode(current_map)
+
+        if self._heal is not None:
+            self._heal.tick(now)
+        self._buffs.tick(now)
 
         self._blacklist.expire(now)
 
@@ -244,19 +273,53 @@ class HuntController:
 
     def _handle_map_reset(self) -> None:
         map_name = self._sniffer.get_map_name() or "?"
-        allowed = (
-            "allowed" if map_name in self._cfg.allowed_maps
-            else "skip-consumables"
+        mode = (
+            "manual-control"
+            if self._is_manual_control_map(map_name)
+            else "active-hunt"
         )
-        logger.info("Map change → %s (%s) → reset hunt state", map_name, allowed)
+        logger.info("Map change → %s (%s) → reset hunt state", map_name, mode)
         self._engagement.state.clear()
         self._blacklist.clear()
         self._cells.clear()
         self._immediate_teleport_pending = False
+        self._dead_zone_blocked_since = None
         if self._idle is not None:
             self._idle.on_map_reset()
         if self._return_to_farm is not None:
             self._return_to_farm.on_map_change(map_name, time.monotonic())
+
+    def _is_manual_control_map(self, map_name: str) -> bool:
+        if map_name == "?":
+            return False
+        return map_name in self._cfg.manual_control_maps
+
+    def _enter_manual_control_mode(self, map_name: str) -> None:
+        if self._manual_control_map == map_name:
+            return
+        self._manual_control_map = map_name
+        if self._engagement.state.gid is not None:
+            self._engagement.state.clear()
+        self._immediate_teleport_pending = False
+        self._dead_zone_blocked_since = None
+        if self._idle is not None:
+            # Re-entering combat maps starts with a fresh idle window.
+            self._idle.on_map_reset()
+        logger.info(
+            "Manual-control map '%s': automation suspended "
+            "(no attack, no teleport)",
+            map_name,
+        )
+
+    def _leave_manual_control_mode(self, map_name: str) -> None:
+        if self._manual_control_map is None:
+            return
+        prev = self._manual_control_map
+        self._manual_control_map = None
+        logger.info(
+            "Left manual-control map '%s' -> '%s': automation resumed",
+            prev, map_name,
+        )
 
     def _handle_escape_tick(self) -> None:
         # Danger takes priority; abandon any target without blacklisting
@@ -344,6 +407,7 @@ class HuntController:
         result = collect_candidates(
             visible,
             allowed_names=self._cfg.allowed_names,
+            target_all_mobs=self._cfg.target_all_mobs,
             blacklist=self._blacklist,
             cell_observer=self._cells,
             dead_zone_filter=self._dead_zone_filter,
@@ -353,10 +417,27 @@ class HuntController:
         )
         if not result.candidates:
             self._log_no_candidates(now, visible, result.blocked_by_dead_zone)
-            # Mobs hidden behind the HUD: don't teleport — they'll walk out.
-            if self._idle is None or result.blocked_by_dead_zone != 0:
+            if self._idle is None:
                 self._immediate_teleport_pending = False
                 return
+            if result.blocked_by_dead_zone != 0:
+                if self._dead_zone_blocked_since is None:
+                    self._dead_zone_blocked_since = now
+                    self._immediate_teleport_pending = False
+                    return
+                blocked_for = now - self._dead_zone_blocked_since
+                if blocked_for < self._cfg.engagement.dead_zone_wait_sec:
+                    self._immediate_teleport_pending = False
+                    return
+                self._idle.force_fire(
+                    now,
+                    "dead-zone blocked "
+                    f"{blocked_for:.1f}s — forcing teleport",
+                )
+                self._dead_zone_blocked_since = now
+                self._immediate_teleport_pending = False
+                return
+            self._dead_zone_blocked_since = None
             if self._immediate_teleport_pending:
                 self._idle.force_fire(now, "path stuck — no other candidates")
                 self._immediate_teleport_pending = False
@@ -364,6 +445,7 @@ class HuntController:
                 self._idle.tick(now)
             return
 
+        self._dead_zone_blocked_since = None
         self._immediate_teleport_pending = False
         target = pick_nearest(player_cell, result.candidates)
         if self._idle is not None:
@@ -387,10 +469,15 @@ class HuntController:
                 else f" walking({age:.2f}s)"
             )
             parts.append(f"{name}@({x},{y}){settled}")
+        names_hint = (
+            "(all mob names)"
+            if self._cfg.target_all_mobs
+            else sorted(self._cfg.allowed_names)
+        )
         logger.info(
             "no candidates (allowed=%s, blacklisted=%d, "
             "dead_zone_blocked=%d, visible=%s)",
-            sorted(self._cfg.allowed_names),
+            names_hint,
             len(self._blacklist),
             blocked,
             ", ".join(parts) if parts else "none",

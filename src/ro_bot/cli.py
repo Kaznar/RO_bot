@@ -43,6 +43,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "(memory reads will fail without admin)."
         ),
     )
+    target_group = hunt.add_mutually_exclusive_group()
+    target_group.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Attack every visible mob (ignore mobs whitelist), track all "
+            "spawns in memory, heal/buff on any map, disable return-to-farm."
+        ),
+    )
+    target_group.add_argument(
+        "--mobs",
+        nargs="+",
+        metavar="NAME",
+        help=(
+            "Target only these mob names for this run "
+            "(overrides profile.mobs.allowed)."
+        ),
+    )
     return parser
 
 
@@ -54,7 +72,11 @@ def main() -> int:
             ensure_admin()
         setup_root_logging()
         setup_hunt_logging()
-        return run_hunt(config_path=args.config)
+        return run_hunt(
+            config_path=args.config,
+            hunt_all=args.all,
+            selected_mobs=args.mobs,
+        )
 
     return 2
 

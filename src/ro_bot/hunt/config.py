@@ -14,6 +14,17 @@ from ro_bot.hunt.dead_zones.zone import DeadZone
 
 
 @dataclass(frozen=True)
+class AimOffsetSpec:
+    """Vertical aim offset in map-cell units shared by several mob names.
+
+    Positive ``y_offset_cells`` clicks higher on screen (useful for
+    flying sprites where the clickable area sits above ground cell).
+    """
+    names: frozenset[str]
+    y_offset_cells: float
+
+
+@dataclass(frozen=True)
 class BuffSpec:
     """One timed consumable on the hotbar.
 
@@ -110,6 +121,10 @@ class EngagementConfig:
     blocked / mob already gone). Blacklist short and look for another
     candidate immediately instead of waiting the full
     ``kill_timeout_sec``. Set ``path_stuck_min_dist <= 0`` to disable.
+
+    ``dead_zone_wait_sec`` limits how long we trust "candidate is behind
+    HUD, wait for it to walk out". If no non-dead-zone candidate appears
+    within this window, the controller falls back to idle teleport.
     """
     kill_timeout_sec: float = 15.0
     blacklist_sec: float = 30.0
@@ -119,6 +134,7 @@ class EngagementConfig:
     path_stuck_min_dist: int = 5
     path_stuck_timeout_sec: float = 1.5
     path_stuck_blacklist_sec: float = 5.0
+    dead_zone_wait_sec: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -132,7 +148,10 @@ class HuntConfig:
     char_name: str
     allowed_names: frozenset[str] = field(default_factory=frozenset)
     dangerous_names: frozenset[str] = field(default_factory=frozenset)
-    allowed_maps: frozenset[str] = field(default_factory=frozenset)
+    #: Maps where hunt automation is suspended (manual player control).
+    #: On these maps the controller behaves like pause: no attack, no
+    #: teleport, no automated actions.
+    manual_control_maps: frozenset[str] = field(default_factory=frozenset)
     dead_zones: tuple[DeadZone, ...] = ()
     engagement: EngagementConfig = field(default_factory=EngagementConfig)
     heal: HealConfig | None = None
@@ -140,3 +159,8 @@ class HuntConfig:
     escape: EscapeConfig | None = None
     return_to_farm: ReturnToFarmConfig | None = None
     buffs: tuple[BuffSpec, ...] = ()
+    aim_offsets: tuple[AimOffsetSpec, ...] = ()
+    #: Accept every mob name in targeting (ignore ``allowed_names``).
+    target_all_mobs: bool = False
+    #: Heal/buff on any map with a known name (ignore town blacklist).
+    ignore_map_restrictions: bool = False

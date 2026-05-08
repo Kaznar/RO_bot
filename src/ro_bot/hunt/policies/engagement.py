@@ -5,8 +5,8 @@ keeps swinging until the mob dies or the cursor leaves the sprite.
 Our job is:
 
   * ``engage`` — aim at the first click (fresh target)
-  * ``continue_engagement`` — re-aim only when the mob walks to a new,
-    settled cell and cooldown has elapsed
+  * ``continue_engagement`` — re-click after cooldown while the mob is
+    visible on a settled, non-HUD cell (even if it did not move)
 
 Everything else (target selection, heal, escape, buffs, idle) is
 elsewhere.
@@ -95,7 +95,9 @@ class EngagementMachine:
         self.state.player_cell_at_engage = player_cell
         self.state.engage_dist = dist
 
-        self._aim.aim_and_click(player_cell, cell)
+        self._aim.aim_and_click(
+            player_cell, cell, target_name=candidate.name,
+        )
 
         logger.info(
             "Engage: gid=%d name='%s' map=(%d,%d) player=(%d,%d) dist=%d",
@@ -108,8 +110,8 @@ class EngagementMachine:
         player_cell: tuple[int, int],
         now: float,
     ) -> None:
-        """Re-aim and re-click only when the engaged mob has walked to
-        a new, settled, non-HUD cell and the cooldown has elapsed.
+        """Re-click while the engaged mob is on a settled, non-HUD cell
+        and the cooldown has elapsed.
         """
         if self.state.gid is None:
             return
@@ -117,8 +119,6 @@ class EngagementMachine:
             return
         settled = self._cells.settled_cell(self.state.gid, now)
         if settled is None:
-            return
-        if settled == self.state.last_aim_cell:
             return
         if now - self._aim.last_click_at < self._reaim_cooldown_sec:
             return
@@ -129,11 +129,19 @@ class EngagementMachine:
             )
             return
 
-        logger.debug(
-            "Re-aim: gid=%d %s→%s",
-            self.state.gid, self.state.last_aim_cell, settled,
+        if settled == self.state.last_aim_cell:
+            logger.debug(
+                "Re-click (stationary): gid=%d at=%s",
+                self.state.gid, settled,
+            )
+        else:
+            logger.debug(
+                "Re-aim: gid=%d %s→%s",
+                self.state.gid, self.state.last_aim_cell, settled,
+            )
+        self._aim.aim_and_click(
+            player_cell, settled, target_name=self.state.name,
         )
-        self._aim.aim_and_click(player_cell, settled)
         self.state.last_aim_cell = settled
 
     def shift(self, delta: float) -> None:
