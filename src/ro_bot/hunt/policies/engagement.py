@@ -38,6 +38,10 @@ class TargetState:
     when the engage click is sent, used by the path-stuck policy to
     detect "player did not move toward a distant target → click was
     rejected" (no shift needed: cell coords aren't time-based).
+
+    ``approach_anchor_cell`` / ``approach_stationary_since`` track how
+    long the player has stood still on one tile while approaching the
+    mob (:class:`ApproachStallPolicy`).
     """
     gid: int | None = None
     name: str | None = None
@@ -45,6 +49,8 @@ class TargetState:
     last_aim_cell: tuple[int, int] | None = None
     player_cell_at_engage: tuple[int, int] | None = None
     engage_dist: int = 0
+    approach_anchor_cell: tuple[int, int] | None = None
+    approach_stationary_since: float | None = None
 
     def clear(self) -> None:
         self.gid = None
@@ -53,10 +59,14 @@ class TargetState:
         self.last_aim_cell = None
         self.player_cell_at_engage = None
         self.engage_dist = 0
+        self.approach_anchor_cell = None
+        self.approach_stationary_since = None
 
     def shift(self, delta: float) -> None:
         if self.engaged_at:
             self.engaged_at += delta
+        if self.approach_stationary_since is not None:
+            self.approach_stationary_since += delta
 
 
 class EngagementMachine:
@@ -94,6 +104,8 @@ class EngagementMachine:
         self.state.last_aim_cell = cell
         self.state.player_cell_at_engage = player_cell
         self.state.engage_dist = dist
+        self.state.approach_anchor_cell = player_cell
+        self.state.approach_stationary_since = now
 
         self._aim.aim_and_click(
             player_cell, cell, target_name=candidate.name,

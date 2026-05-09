@@ -72,6 +72,13 @@ DEFAULTS: dict[str, Any] = {
             "path_stuck_timeout_sec": 1.5,
             "path_stuck_blacklist_sec": 5.0,
             "dead_zone_wait_sec": 3.0,
+            "approach_stall_timeout_sec": 2.5,
+            "approach_stall_min_dist": 3,
+            "approach_stall_blacklist_sec": 5.0,
+            "ks_guard_min_dist": 0,
+            "ks_guard_min_hp_deficit": 1,
+            "ks_guard_blacklist_sec": 8.0,
+            "abandon_target_key": "",
         },
         "heal": {
             "key": "q",
@@ -82,6 +89,11 @@ DEFAULTS: dict[str, Any] = {
             "key": "t",
             "after_sec": 10.0,
             "after_kill_sec": 2.0,
+        },
+        "overweight": {
+            "ratio": 0.9,
+            "key": "h",
+            "press_interval_sec": 4.0,
         },
         "escape": {
             "key": "t",

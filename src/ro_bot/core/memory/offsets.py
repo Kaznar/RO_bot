@@ -52,3 +52,8 @@ class MemoryOffsets:
     hp_max: int = -0x2C4C
     sp_current: int = -0x2C48
     sp_max: int = -0x2C44
+    #: Carried weight / max (int32 each). Empirical NexusRO; re-run
+    #: ``scripts/find_weight_in_memory.py`` if a client update moves them.
+    #: Higher address (-0x6AB8) holds current; lower (-0x6ABC) holds max.
+    weight_current: int = -0x6AB8
+    weight_max: int = -0x6ABC

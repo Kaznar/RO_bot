@@ -15,6 +15,30 @@ from ro_bot.hunt.cell_observer import CellObserver
 from ro_bot.hunt.dead_zones.filter import DeadZoneFilter
 
 
+def is_remote_contested_mob(
+    player_cell: tuple[int, int],
+    mob_cell: tuple[int, int],
+    hp: int,
+    max_hp: int,
+    *,
+    min_dist: int,
+    min_hp_deficit: int,
+) -> bool:
+    """True if the mob is far enough and already damaged (someone else hit it)."""
+    if min_dist <= 0:
+        return False
+    if min_hp_deficit <= 0:
+        return False
+    if max_hp <= 0:
+        return False
+    if max_hp - hp < min_hp_deficit:
+        return False
+    px, py = player_cell
+    mx, my = mob_cell
+    dist = abs(mx - px) + abs(my - py)
+    return dist >= min_dist
+
+
 @dataclass(frozen=True)
 class Candidate:
     """A targetable mob: (gid, name, settled map cell)."""
@@ -44,6 +68,9 @@ def collect_candidates(
     is_alive: Callable[[int], bool],
     now: float,
     player_cell: tuple[int, int],
+    ks_guard_min_dist: int = 0,
+    ks_guard_min_hp_deficit: int = 1,
+    get_entity_hp: Callable[[int], tuple[int, int] | None] | None = None,
 ) -> CandidateResult:
     """Filter ``visible`` into clickable candidates.
 
@@ -53,6 +80,7 @@ def collect_candidates(
       3. sniffer says still alive
       4. cell has been settled for ``target_settle_sec``
       5. settled cell doesn't project onto any dead zone
+      6. optional KS guard — distant mobs that already lost HP
 
     The ``blocked_by_dead_zone`` counter tells the caller whether "no
     candidates" means *nothing visible* (fire idle action) vs. *mob
@@ -73,6 +101,19 @@ def collect_candidates(
         if dead_zone_filter.contains(player_cell, settled):
             blocked += 1
             continue
+        if ks_guard_min_dist > 0 and get_entity_hp is not None:
+            hp_pair = get_entity_hp(gid)
+            if hp_pair is not None:
+                hp_e, max_hp_e = hp_pair
+                if is_remote_contested_mob(
+                    player_cell,
+                    settled,
+                    hp_e,
+                    max_hp_e,
+                    min_dist=ks_guard_min_dist,
+                    min_hp_deficit=ks_guard_min_hp_deficit,
+                ):
+                    continue
         candidates.append(Candidate(gid=gid, name=name, x=settled[0], y=settled[1]))
     return CandidateResult(
         candidates=candidates, blocked_by_dead_zone=blocked,

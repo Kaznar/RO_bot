@@ -130,6 +130,14 @@ All tunable timers in seconds. Defaults are conservative:
 | `path_stuck_min_dist` | 5 | Distance (cells) above which path-stuck detection arms. `0` disables. |
 | `path_stuck_timeout_sec` | 1.5 | If the player hasn't moved a single cell within this window after engaging a distant mob, the click was rejected — abandon the target early. |
 | `path_stuck_blacklist_sec` | 5.0 | Short blacklist after path-stuck abandonment. Followed by an immediate teleport when no other candidate is reachable. |
+| `dead_zone_wait_sec` | 3.0 | Max wait when only HUD-masked mobs are visible before forcing idle teleport anyway. |
+| `approach_stall_timeout_sec` | 2.5 | Stood still on one cell this long while the mob stays ≥ `approach_stall_min_dist` away → abandon (melee / cliff). `≤ 0` disables. |
+| `approach_stall_min_dist` | 3 | Minimum Manhattan distance to mob for approach-stall to arm. |
+| `approach_stall_blacklist_sec` | 5.0 | Blacklist after approach-stall abandonment. |
+| `ks_guard_min_dist` | 0 | Skip / abandon mobs at least this far away if `max_hp - hp ≥ ks_guard_min_hp_deficit` (already chipped). `0` disables KS guard. |
+| `ks_guard_min_hp_deficit` | 1 | Require `max_hp - hp ≥` this before treating a distant mob as contested. |
+| `ks_guard_blacklist_sec` | 8.0 | Blacklist after KS-guard abandonment while engaged. |
+| `abandon_target_key` | omitted | Optional key (e.g. your cancel-target bind) pressed after KS / approach-stall abandon. Empty string omits. |
 
 ### `profile.heal`
 
@@ -148,6 +156,22 @@ Omit the whole `heal` block to disable the heal policy.
 - `after_sec` — no candidates for this long → press `key`.
 - `after_kill_sec` — same but after last kill, typically smaller for
   "tp after kill" playstyles.
+
+Omit the whole block to disable.
+
+### `profile.overweight`
+
+When `weight / weight_max` from memory is **≥ `ratio`**, the hunt loop
+stops targeting and idle teleport, clears any current target, and
+presses `key` at most once per `press_interval_sec` (e.g. macro to
+open storage / drop loot). Fly wing often fails at high weight, so
+this avoids spamming `idle_action` teleport.
+
+| Field | Default | Meaning |
+|--------|---------|---------|
+| `ratio` | `0.9` | Trigger when current weight ≥ this fraction of max. |
+| `key` | `h` | HID key to press. Set to `""` or omit the whole block to disable. |
+| `press_interval_sec` | `4.0` | Minimum gap between overweight key presses. |
 
 Omit the whole block to disable.
 
@@ -178,6 +202,10 @@ List of `{order, key, interval_sec}` entries.
   teleport, no heal/buff presses, no return-to-farm walk.
 - Use this for towns, market maps, and any place where you want full
   manual control.
+- When you **leave** a hunt map for one of these maps and **return** to
+  the same hunt map, the bot presses `idle_action.key` once **before**
+  picking targets (avoids clicking a mob on the warp). Requires
+  `profile.idle_action` to be configured.
 
 ### `profile.return_to_farm`
 
@@ -191,7 +219,7 @@ or `maps` is empty.
 | `settle_sec` | `1.5` | Delay after the map change before the first click (gives the client time to load player position). |
 | `retry_sec` | `5.0` | If still on the neighbor map after this many seconds, click again. |
 | `max_retries` | `4` | Maximum clicks before giving up (capped by the 4-step jitter sequence below). |
-| `active_farm_map` | omitted | When set (e.g. `um_fild03`), only walk-backs **toward that farm map** run: you must land on a map listed as its neighbor in `maps`. Standing on `active_farm_map` never arms return — so you can list both `cmd_fild01` and `um_fild03` as farms with edges between them. Switch this value when you move farming to another map. |
+| `active_farm_map` | omitted | When set (e.g. `um_fild03`), only walk-backs **toward that farm map** run: you must land on a map listed as its neighbor in `maps`. Standing on `active_farm_map` never arms return — so you can list both `cmd_fild01` and `um_fild03` as farms with edges between them. Switch this value when you move farming to another map. When you step from a **neighbor of that farm** (per `maps`) back onto `active_farm_map`, the hunt controller queues one `idle_action` teleport **before** targeting (same warp-tile escape as town return). Requires `profile.idle_action`. |
 | `maps` | `{}` | `farm_map → {neighbor_map: direction}` — one entry per neighbor. |
 
 **Retry jitter sequence.** Each retry aims at a slightly different

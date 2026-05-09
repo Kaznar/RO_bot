@@ -73,6 +73,13 @@ Constants live in `hunt/constants.py`; per-profile knobs live in
   within `timeout_sec`, the click was rejected (path blocked / mob
   already gone). Blacklist short and bypass idle grace on the next
   no-candidates pass.
+- `approach_stall_*` — if the player stops on one cell while the mob’s
+  settled cell is still ≥ `approach_stall_min_dist` away for
+  `approach_stall_timeout_sec`, abandon (common melee / height /
+  ledge failure mode).
+- `ks_guard_*` — do not target (and abandon if already chasing) mobs
+  that are still ≥ `ks_guard_min_dist` away but already damaged
+  (`max_hp - hp` ≥ threshold), to reduce kill-steal appearances.
 
 ## Policies (all in `src/ro_bot/hunt/policies/`)
 
@@ -81,10 +88,13 @@ Constants live in `hunt/constants.py`; per-profile knobs live in
 | `heal` | sniffer HP, `HealConfig` | Presses heal key when `hp < min_hp`, respects `cooldown_sec`. |
 | `buffs` | `list[BuffSpec]`, map name | Rotates buff presses on `interval_sec` each; skipped off-map. |
 | `idle_action` | last-candidate timestamp, last-kill timestamp | Presses teleport after `after_sec` idle or `after_kill_sec` post-kill. Can be force-fired by path-stuck. |
+| `overweight` | memory weight / max | At ≥ `ratio` load: press `key` on interval, suspend hunt + idle TP until lighter. |
 | `escape` | sniffer snapshot, `dangerous` mob list | Teleports on first sight; cooldown prevents key spam. |
-| `targeting` | sniffer + tracker snapshot, blacklist, dead zones, cell observer | Returns nearest settled, non-masked candidate. |
+| `targeting` | sniffer + tracker snapshot, blacklist, dead zones, cell observer | Returns nearest settled, non-masked candidate; optional KS HP/dist filter. |
 | `engagement` | targeting result, aim service, click cooldown | Drives CLICKING → ENGAGED → back to IDLE. |
 | `path_stuck` | engagement target state, current player cell | Detects rejected engage clicks on distant targets (player not moving) and abandons them after `path_stuck_timeout_sec`. |
+| `approach_stall` | engagement state, player vs settled mob distance | Abandons when the player stalls on one tile but the mob is still too far (Manhattan). |
+| `remote_contested` | sniffer entity HP vs max_hp, distance | Abandons engaged targets that match the KS guard; same rule filters `collect_candidates`. |
 | `return_to_farm` | map change events, `walk_cells`/direction config | When the bot lands on a configured neighbor map, walks back through the warp toward the farm map (with retry jitter). |
 
 ## Pause / resume
@@ -95,6 +105,21 @@ resume replays the delta into every policy timestamp via
 not from zero.
 
 ## Map changes
+
+When you leave a **hunt** map (not in `manual_control_maps`) for a
+**manual-control** map (town, storage, …) and later return to that same
+hunt map, the controller queues one **idle teleport** (`profile.idle_action.key`,
+usually `t`) on the first hunt tick **before** targeting — so you do not
+immediately click a mob that may be standing on the warp tile (avoid
+engage / idle / escape loops). Transitions use the **previous → new**
+map names from each 0x0091 callback (not a tick-delayed snapshot), so
+rapid town↔farm hops still match correctly.
+
+When ``return_to_farm.active_farm_map`` is set, the same idle teleport
+queues on **neighbor → that farm** edges listed under that farm in
+``return_to_farm.maps`` (e.g. ``cmd_fild01`` → ``um_fild03`` after a
+return-to-farm walk), so the bot does not immediately engage on the
+warp tile.
 
 0x0091 ZC_NPCACK_MAPMOVE clears:
 

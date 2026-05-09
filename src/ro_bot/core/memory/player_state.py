@@ -27,6 +27,8 @@ class PlayerState:
     hp_max: int = 0
     sp: int = 0
     sp_max: int = 0
+    weight: int = 0
+    weight_max: int = 0
 
 
 class PlayerReader:
@@ -56,6 +58,11 @@ class PlayerReader:
     @property
     def connected(self) -> bool:
         return self._process is not None and self._anchor != 0
+
+    @property
+    def anchor_address(self) -> int:
+        """Character-name anchor used for stat offsets; ``0`` if not connected."""
+        return self._anchor
 
     @property
     def process(self) -> ProcessHandle:
@@ -135,11 +142,15 @@ class PlayerReader:
         hp_max = h.read_int32(a + o.hp_max)
         sp = h.read_int32(a + o.sp_current)
         sp_max = h.read_int32(a + o.sp_max)
+        w = h.read_int32(a + o.weight_current)
+        w_max = h.read_int32(a + o.weight_max)
 
         return PlayerState(
             x=px or 0, y=py or 0,
             hp=hp or 0, hp_max=hp_max or 0,
             sp=sp or 0, sp_max=sp_max or 0,
+            weight=max(0, w or 0),
+            weight_max=max(0, w_max or 0),
         )
 
     def disconnect(self) -> None:

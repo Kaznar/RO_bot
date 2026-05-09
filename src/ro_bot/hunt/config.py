@@ -61,6 +61,18 @@ class IdleActionConfig:
 
 
 @dataclass(frozen=True)
+class OverweightConfig:
+    """When carried weight is too high, press ``key`` and pause hunt/idle TP.
+
+    ``ratio`` applies to ``weight / weight_max`` from memory
+    (:class:`PlayerState`). Empty ``key`` disables the policy.
+    """
+    ratio: float = 0.9
+    key: str = "h"
+    press_interval_sec: float = 4.0
+
+
+@dataclass(frozen=True)
 class EscapeConfig:
     """Danger-mob teleport parameters."""
     key: str
@@ -136,6 +148,21 @@ class EngagementConfig:
     ``dead_zone_wait_sec`` limits how long we trust "candidate is behind
     HUD, wait for it to walk out". If no non-dead-zone candidate appears
     within this window, the controller falls back to idle teleport.
+
+    ``approach_stall_*`` handles melee / ledge cases: the player moved
+    toward the mob but has stood still on one cell for
+    ``approach_stall_timeout_sec`` while the mob remains at least
+    ``approach_stall_min_dist`` away. Disabled when
+    ``approach_stall_timeout_sec <= 0``.
+
+    ``ks_guard_*`` skips (and abandons) targets that are still
+    ``>= ks_guard_min_dist`` away but already have
+    ``max_hp - hp >= ks_guard_min_hp_deficit`` (someone else is hitting
+    them). Disabled when ``ks_guard_min_dist <= 0``.
+
+    ``abandon_target_key`` — optional single keypress after these
+    abandonments (and KS abandon) to clear target in-game; omit or "" to
+    skip.
     """
     kill_timeout_sec: float = 15.0
     blacklist_sec: float = 30.0
@@ -146,6 +173,13 @@ class EngagementConfig:
     path_stuck_timeout_sec: float = 1.5
     path_stuck_blacklist_sec: float = 5.0
     dead_zone_wait_sec: float = 3.0
+    approach_stall_timeout_sec: float = 2.5
+    approach_stall_min_dist: int = 3
+    approach_stall_blacklist_sec: float = 5.0
+    ks_guard_min_dist: int = 0
+    ks_guard_min_hp_deficit: int = 1
+    ks_guard_blacklist_sec: float = 8.0
+    abandon_target_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +201,7 @@ class HuntConfig:
     engagement: EngagementConfig = field(default_factory=EngagementConfig)
     heal: HealConfig | None = None
     idle_action: IdleActionConfig | None = None
+    overweight: OverweightConfig | None = None
     escape: EscapeConfig | None = None
     return_to_farm: ReturnToFarmConfig | None = None
     buffs: tuple[BuffSpec, ...] = ()

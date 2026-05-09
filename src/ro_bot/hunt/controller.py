@@ -13,6 +13,16 @@ Responsibilities (ordered per tick):
   9. Otherwise: collect candidates, pick nearest, engage — or fire idle
      action after the configured grace.
 
+  Overweight (memory): if weight / max ≥ ratio, suspend steps 8–9,
+  press the overweight key (e.g. storage macro), do not idle-teleport.
+
+  Warp return: hunt map → manual-control map → back to that hunt map
+  queues one idle teleport before step 9 (needs ``idle_action``).
+
+  Active farm: when ``return_to_farm.active_farm_map`` is set, a 0091
+  edge from a configured **neighbor** of that farm onto the farm map
+  also queues one idle teleport first (return-to-farm walk-off warp).
+
 Everything heavy lives in submodules (policies / state containers).
 This file is the glue.
 """
@@ -23,7 +33,7 @@ import logging
 import time
 
 from ro_bot.core.hid.bridge import HidBridge
-from ro_bot.core.memory.player_state import PlayerReader
+from ro_bot.core.memory.player_state import PlayerReader, PlayerState
 from ro_bot.core.network.packets import VanishType
 from ro_bot.core.network.sniffer import PacketSniffer
 from ro_bot.core.tracking.entity_tracker import EntityTracker
@@ -35,6 +45,7 @@ from ro_bot.hunt.constants import (
     ENGAGED_POLL_SEC,
     IDLE_POLL_SEC,
     NO_CANDIDATE_LOG_INTERVAL_SEC,
+    WEIGHT_SNAPSHOT_INTERVAL_SEC,
 )
 from ro_bot.hunt.dead_zones.filter import DeadZoneFilter
 from ro_bot.hunt.event_bus import EventBus
@@ -44,7 +55,10 @@ from ro_bot.hunt.policies.engagement import EngagementMachine, TargetState
 from ro_bot.hunt.policies.escape import EscapePolicy
 from ro_bot.hunt.policies.heal import HealPolicy
 from ro_bot.hunt.policies.idle_action import IdleActionPolicy
+from ro_bot.hunt.policies.overweight import OverweightPolicy
+from ro_bot.hunt.policies.approach_stall import ApproachStallPolicy
 from ro_bot.hunt.policies.path_stuck import PathStuckPolicy
+from ro_bot.hunt.policies.remote_contested import RemoteContestedPolicy
 from ro_bot.hunt.policies.return_to_farm import ReturnToFarmPolicy
 from ro_bot.hunt.policies.targeting import collect_candidates, pick_nearest
 
@@ -83,6 +97,8 @@ class HuntController:
             reaim_cooldown_sec=cfg.engagement.reaim_click_cooldown_sec,
         )
         self._path_stuck = PathStuckPolicy(cfg.engagement, self._blacklist)
+        self._approach_stall = ApproachStallPolicy(cfg.engagement, self._blacklist)
+        self._remote_contested = RemoteContestedPolicy(cfg.engagement, self._blacklist)
 
         self._heal = (
             HealPolicy(
@@ -105,6 +121,10 @@ class HuntController:
             IdleActionPolicy(cfg.idle_action, bridge)
             if cfg.idle_action is not None else None
         )
+        self._overweight = (
+            OverweightPolicy(cfg.overweight, bridge)
+            if cfg.overweight is not None else None
+        )
         self._escape = (
             EscapePolicy(cfg.escape, cfg.dangerous_names, bridge, sniffer)
             if cfg.escape is not None else None
@@ -122,6 +142,7 @@ class HuntController:
         self._kills = 0
         self._timeouts = 0
         self._last_no_candidate_log: float = 0.0
+        self._last_weight_log: float = 0.0
         # Set by path-stuck abandonment; consumed once by the next
         # candidate-selection pass to bypass idle grace when nothing
         # else is reachable.
@@ -133,6 +154,15 @@ class HuntController:
         # In this mode the hunt loop behaves like pause: no attack, no TP,
         # no policy actions. Player controls movement manually.
         self._manual_control_map: str | None = None
+        self._was_overweight_last_tick: bool = False
+        self._warp_return_tp_pending: bool = False
+        self._warp_return_tp_target: str | None = None
+        self._pending_warp_return_idle_tp: bool = False
+        #: Log line for :meth:`IdleActionPolicy.force_fire` when
+        #: ``_pending_warp_return_idle_tp`` is set.
+        self._pending_warp_return_idle_reason: str | None = None
+        #: Previous ``map_name`` from the last sniffer map callback (0091).
+        self._map_change_listener_prev: str | None = None
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -157,6 +187,12 @@ class HuntController:
             self._cfg.engagement.blacklist_sec,
             len(self._cfg.dead_zones),
         )
+        if self._cfg.overweight is not None:
+            ow = self._cfg.overweight
+            logger.info(
+                "Overweight policy: ratio=%.2f key='%s' interval=%.1fs",
+                ow.ratio, ow.key, ow.press_interval_sec,
+            )
 
     def uninstall(self) -> None:
         if not self._installed:
@@ -168,6 +204,7 @@ class HuntController:
         self._engagement.state.clear()
         self._cells.clear()
         self._blacklist.clear()
+        self._map_change_listener_prev = None
         logger.info(
             "HuntController uninstalled (kills=%d timeouts=%d)",
             self._kills, self._timeouts,
@@ -200,8 +237,12 @@ class HuntController:
             self._escape.shift(delta)
         if self._return_to_farm is not None:
             self._return_to_farm.shift(delta)
+        if self._overweight is not None:
+            self._overweight.shift(delta)
         if self._last_no_candidate_log:
             self._last_no_candidate_log += delta
+        if self._last_weight_log:
+            self._last_weight_log += delta
         if self._dead_zone_blocked_since is not None:
             self._dead_zone_blocked_since += delta
         logger.info("Resumed after %.1fs paused", delta)
@@ -224,16 +265,42 @@ class HuntController:
             return
 
         now = time.monotonic()
+        self._tick_body(now)
+
+    def _tick_body(self, now: float) -> None:
         events = self._events.drain()
         if events.map_reset:
-            self._handle_map_reset()
+            self._handle_map_reset(events.map_change_pairs)
             return
 
         current_map = self._sniffer.get_map_name() or "?"
+        if self._pending_warp_return_idle_tp:
+            if self._is_manual_control_map(current_map):
+                self._pending_warp_return_idle_tp = False
+                self._pending_warp_return_idle_reason = None
+            elif self._idle is not None:
+                self._idle.force_fire(
+                    now,
+                    self._pending_warp_return_idle_reason
+                    or "warp escape before hunt",
+                )
+                self._pending_warp_return_idle_tp = False
+                self._pending_warp_return_idle_reason = None
+                return
+            else:
+                logger.warning(
+                    "warp-return teleport skipped (no profile.idle_action)",
+                )
+                self._pending_warp_return_idle_tp = False
+                self._pending_warp_return_idle_reason = None
+                return
+
         if self._is_manual_control_map(current_map):
             self._enter_manual_control_mode(current_map)
             return
         self._leave_manual_control_mode(current_map)
+
+        self._maybe_log_weight_snapshot(now)
 
         if self._heal is not None:
             self._heal.tick(now)
@@ -257,6 +324,27 @@ class HuntController:
             self._return_to_farm.tick(now)
             return
 
+        st_ov = self._read_player_state()
+        overloaded = (
+            self._overweight is not None
+            and st_ov is not None
+            and self._overweight.is_overloaded(st_ov)
+        )
+        if overloaded:
+            if self._engagement.state.gid is not None:
+                logger.info(
+                    "Overweight: clearing target gid=%d (%.1f%% of max weight)",
+                    self._engagement.state.gid,
+                    100.0 * st_ov.weight / st_ov.weight_max,
+                )
+                self._engagement.state.clear()
+            self._overweight.tick(now)
+            if not self._was_overweight_last_tick and self._idle is not None:
+                self._idle.on_map_reset()
+            self._was_overweight_last_tick = True
+            return
+        self._was_overweight_last_tick = False
+
         if self._engagement.state.gid is not None:
             if self._resolve_engaged(now, events.died_gids, events.lost_gids):
                 return
@@ -271,8 +359,15 @@ class HuntController:
 
     # ── Helpers ─────────────────────────────────────────────────────
 
-    def _handle_map_reset(self) -> None:
+    def _handle_map_reset(
+        self,
+        pairs: tuple[tuple[str | None, str], ...],
+    ) -> None:
+        for old_map, new_map in pairs:
+            self._apply_warp_return_transition(old_map, new_map)
+
         map_name = self._sniffer.get_map_name() or "?"
+
         mode = (
             "manual-control"
             if self._is_manual_control_map(map_name)
@@ -288,6 +383,84 @@ class HuntController:
             self._idle.on_map_reset()
         if self._return_to_farm is not None:
             self._return_to_farm.on_map_change(map_name, time.monotonic())
+        if self._overweight is not None:
+            self._overweight.on_map_reset()
+
+    def _apply_warp_return_transition(
+        self,
+        old_map: str | None,
+        new_map: str,
+    ) -> None:
+        """Detect hunt↔town hops for one 0x0091 edge (sniffer-thread order)."""
+        if new_map == "?":
+            return
+
+        if (
+            self._warp_return_tp_pending
+            and self._warp_return_tp_target is not None
+            and new_map == self._warp_return_tp_target
+            and old_map is not None
+            and old_map != "?"
+            and old_map != new_map
+        ):
+            self._pending_warp_return_idle_tp = True
+            self._pending_warp_return_idle_reason = (
+                "return from manual-control map — warp escape"
+            )
+            self._warp_return_tp_pending = False
+            self._warp_return_tp_target = None
+            logger.info(
+                "Map change %s → %s: queued idle teleport before hunt "
+                "(return from manual-control map)",
+                old_map, new_map,
+            )
+
+        if (
+            old_map is not None
+            and old_map != "?"
+            and old_map != new_map
+            and old_map not in self._cfg.manual_control_maps
+            and self._is_manual_control_map(new_map)
+        ):
+            self._warp_return_tp_pending = True
+            self._warp_return_tp_target = old_map
+            logger.info(
+                "Left hunt map '%s' for manual-control '%s' — "
+                "will idle-teleport once on return to farm",
+                old_map, new_map,
+            )
+
+        self._maybe_queue_idle_tp_on_active_farm_return(old_map, new_map)
+
+    def _maybe_queue_idle_tp_on_active_farm_return(
+        self,
+        old_map: str | None,
+        new_map: str,
+    ) -> None:
+        """After walking from a configured neighbor onto ``active_farm_map``."""
+        rtf = self._cfg.return_to_farm
+        if rtf is None or not rtf.transitions:
+            return
+        active = (rtf.active_farm_map or "").strip()
+        if not active or new_map != active:
+            return
+        if old_map is None or old_map in ("", "?"):
+            return
+        if old_map == new_map:
+            return
+        for t in rtf.transitions:
+            if t.farm_map == active and t.neighbor_map == old_map:
+                self._pending_warp_return_idle_tp = True
+                self._pending_warp_return_idle_reason = (
+                    f"return to active_farm_map '{active}' from neighbor "
+                    f"'{old_map}' — warp escape"
+                )
+                logger.info(
+                    "Map change %s → %s: queued idle teleport before hunt "
+                    "(neighbor warp → active_farm_map)",
+                    old_map, new_map,
+                )
+                return
 
     def _is_manual_control_map(self, map_name: str) -> bool:
         if map_name == "?":
@@ -374,6 +547,35 @@ class HuntController:
                 self._idle.on_timeout()
             return False
 
+        self._approach_stall.track_player_cell(state, player_cell, now)
+
+        settled = self._cells.settled_cell(state.gid, now)
+        if settled is not None:
+            ent = self._sniffer.get_entity(state.gid)
+            if ent is not None and self._remote_contested.should_abandon(
+                player_cell, settled, ent.hp, ent.max_hp,
+            ):
+                self._remote_contested.abandon(
+                    state, player_cell, settled, ent.hp, ent.max_hp,
+                )
+                self._immediate_teleport_pending = True
+                self._press_abandon_target_key("ks_guard")
+                if self._idle is not None:
+                    self._idle.on_timeout()
+                return False
+
+            if self._approach_stall.is_stuck(
+                state, player_cell, settled, now,
+            ):
+                self._approach_stall.abandon(
+                    state, player_cell, settled, now,
+                )
+                self._immediate_teleport_pending = True
+                self._press_abandon_target_key("approach_stall")
+                if self._idle is not None:
+                    self._idle.on_timeout()
+                return False
+
         self._engagement.continue_engagement(player_cell, now)
         return True
 
@@ -392,11 +594,53 @@ class HuntController:
         if self._idle is not None:
             self._idle.on_timeout()
 
-    def _read_player_cell(self) -> tuple[int, int] | None:
-        state = self._player_reader.read()
-        if state.x == 0 and state.y == 0:
+    def _maybe_log_weight_snapshot(self, now: float) -> None:
+        """Periodic INFO line from memory (same cadence idea as heal HP)."""
+        if now - self._last_weight_log < WEIGHT_SNAPSHOT_INTERVAL_SEC:
+            return
+        st = self._read_player_state()
+        if st is None or st.weight_max <= 0:
+            return
+        self._last_weight_log = now
+        pct = 100.0 * st.weight / st.weight_max
+        logger.info(
+            "Weight snapshot: %d/%d (%.1f%%)",
+            st.weight, st.weight_max, pct,
+        )
+
+    def _read_player_state(self) -> PlayerState | None:
+        s = self._player_reader.read()
+        if s.x == 0 and s.y == 0:
             return None
-        return (state.x, state.y)
+        return s
+
+    def _read_player_cell(self) -> tuple[int, int] | None:
+        s = self._read_player_state()
+        if s is None:
+            return None
+        return (s.x, s.y)
+
+    def _entity_hp_pair(self, gid: int) -> tuple[int, int] | None:
+        ent = self._sniffer.get_entity(gid)
+        if ent is None:
+            return None
+        return (ent.hp, ent.max_hp)
+
+    def _press_abandon_target_key(self, reason: str) -> None:
+        key = self._cfg.engagement.abandon_target_key
+        if not key:
+            return
+        try:
+            self._bridge.press_key(key)
+        except Exception:
+            logger.exception(
+                "HID press_key abandon_target_key (%s) failed (%s)",
+                key, reason,
+            )
+            return
+        logger.info(
+            "Pressed abandon_target_key '%s' (%s)", key, reason,
+        )
 
     def _select_and_engage(
         self,
@@ -414,6 +658,11 @@ class HuntController:
             is_alive=self._sniffer.is_entity_alive,
             now=now,
             player_cell=player_cell,
+            ks_guard_min_dist=self._cfg.engagement.ks_guard_min_dist,
+            ks_guard_min_hp_deficit=(
+                self._cfg.engagement.ks_guard_min_hp_deficit
+            ),
+            get_entity_hp=self._entity_hp_pair,
         )
         if not result.candidates:
             self._log_no_candidates(now, visible, result.blocked_by_dead_zone)
@@ -491,5 +740,7 @@ class HuntController:
         else:
             self._events.on_lost(gid)
 
-    def _on_map_change(self, _map: str, _x: int, _y: int) -> None:
-        self._events.on_map_reset()
+    def _on_map_change(self, map_name: str, _x: int, _y: int) -> None:
+        old = self._map_change_listener_prev
+        self._events.on_map_reset(old_map=old, new_map=map_name)
+        self._map_change_listener_prev = map_name

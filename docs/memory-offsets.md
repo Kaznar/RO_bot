@@ -6,7 +6,8 @@ All live memory access goes through `core/memory/`:
   VirtualQueryEx, byte-pattern scan).
 - `offsets.py` — the constants documented below.
 - `player_state.py` — `PlayerReader`: connects to the game process,
-  anchors on the character-name string, returns `(x, y, hp, sp)`.
+  anchors on the character-name string, returns
+  `(x, y, hp, sp, weight, weight_max)`.
 - `entity_scanner.py` — heap scan to resolve a GID to its entity
   struct address + position read.
 
@@ -26,6 +27,11 @@ We scan the game process memory for the literal bytes
 | `hp_max` | `-0x2C4C` | int32 | Player max HP |
 | `sp_current` | `-0x2C48` | int32 | Player SP |
 | `sp_max` | `-0x2C44` | int32 | Player max SP |
+| `weight_current` | `-0x6AB8` | int32 | Carried weight (current) |
+| `weight_max` | `-0x6ABC` | int32 | Max weight |
+
+Derived with ``scripts/find_weight_in_memory.py`` on NexusRO (JoJo
+sample); **re-run the script** after a client patch if reads look wrong.
 
 ### Why HP comes from the sniffer, not memory
 
@@ -49,9 +55,26 @@ Game client updates can shift every offset here. If an update
 breaks the bot:
 
 1. Verify anchor still finds the character name (check logs).
-2. Re-derive offsets with an external tool (Cheat Engine pointer
-   scan or the `tools/test_memory.py` REPL in the legacy repo).
-3. Update the defaults in `core/memory/offsets.py`.
+2. Re-derive offsets with an external tool (Cheat Engine pointer scan)
+   or the helper script below.
+
+## Finding weight (current / max)
+
+`MemoryOffsets` / `PlayerReader` already include `weight_current` /
+`weight_max` for the NexusRO build used when calibrating. After a
+**client update**, if reads look wrong, re-derive offsets with the
+client logged in and exact numbers from the status window:
+
+```text
+uv run python scripts/find_weight_in_memory.py --char YOUR_NAME --current 908 --max 5690
+```
+
+The script anchors on the character name like `PlayerReader`, then
+scans a window for several layouts (int32 pairs with **gaps**,
+reversed order, int16 pairs). Defaults: `--below 0x200000`,
+`--above 0x20000`. If you get several matches, change weight in-game,
+re-run, and keep the offset pair that still matches — then patch
+`weight_current` / `weight_max` in `offsets.py`.
 
 Per-server overrides would belong in a future `server_memory_offsets`
 table — not needed yet.

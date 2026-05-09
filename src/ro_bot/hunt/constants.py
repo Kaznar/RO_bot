@@ -20,3 +20,7 @@ NO_CANDIDATE_LOG_INTERVAL_SEC: float = 5.0
 # HP-snapshot INFO cadence (diagnostic line showing what the heal
 # policy currently sees).
 HP_SNAPSHOT_INTERVAL_SEC: float = 5.0
+
+# Carried-weight INFO cadence (memory `PlayerReader`, see
+# `MemoryOffsets.weight_*`).
+WEIGHT_SNAPSHOT_INTERVAL_SEC: float = 5.0

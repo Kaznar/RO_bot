@@ -29,6 +29,7 @@ from ro_bot.hunt.config import (
     FarmTransition,
     HealConfig,
     IdleActionConfig,
+    OverweightConfig,
     ReturnToFarmConfig,
 )
 from ro_bot.hunt.dead_zones.zone import DeadZone
@@ -195,6 +196,9 @@ def _parse_profile(data: dict, *, server: Server, ctx: str) -> Profile:
         ),
         heal=_parse_heal(data.get("heal"), f"{ctx}.heal"),
         idle_action=_parse_idle(data.get("idle_action"), f"{ctx}.idle_action"),
+        overweight=_parse_overweight(
+            data.get("overweight"), f"{ctx}.overweight",
+        ),
         escape=_parse_escape(data.get("escape"), f"{ctx}.escape"),
         engagement=_parse_engagement(
             data.get("engagement"), f"{ctx}.engagement",
@@ -280,6 +284,27 @@ def _parse_heal(data: Any, ctx: str) -> HealConfig | None:
         key=_req(data, "key", ctx, str),
         min_hp=_req_int(data, "min_hp", ctx),
         cooldown_sec=_opt_num(data, "cooldown_sec", ctx, default=1.0),
+    )
+
+
+def _parse_overweight(data: Any, ctx: str) -> OverweightConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    defaults = OverweightConfig()
+    key_raw = data.get("key", defaults.key)
+    if key_raw is None or (isinstance(key_raw, str) and not key_raw.strip()):
+        return None
+    if not isinstance(key_raw, str):
+        raise ConfigError(f"{ctx}.key: expected string")
+    return OverweightConfig(
+        ratio=_opt_num(data, "ratio", ctx, default=defaults.ratio),
+        key=key_raw.strip(),
+        press_interval_sec=_opt_num(
+            data, "press_interval_sec", ctx,
+            default=defaults.press_interval_sec,
+        ),
     )
 
 
@@ -391,6 +416,22 @@ def _parse_farm_transitions(
     return tuple(items)
 
 
+def _parse_optional_abandon_target_key(
+    data: dict, ctx: str, *, default: str | None,
+) -> str | None:
+    if "abandon_target_key" not in data:
+        return default
+    raw = data["abandon_target_key"]
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        raise ConfigError(
+            f"{ctx}.abandon_target_key: expected string or empty",
+        )
+    stripped = raw.strip()
+    return stripped or None
+
+
 def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
     if data is None:
         return EngagementConfig()
@@ -429,6 +470,34 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
         dead_zone_wait_sec=_opt_num(
             data, "dead_zone_wait_sec", ctx,
             default=defaults.dead_zone_wait_sec,
+        ),
+        approach_stall_timeout_sec=_opt_num(
+            data, "approach_stall_timeout_sec", ctx,
+            default=defaults.approach_stall_timeout_sec,
+        ),
+        approach_stall_min_dist=_opt_int(
+            data, "approach_stall_min_dist", ctx,
+            default=defaults.approach_stall_min_dist,
+        ),
+        approach_stall_blacklist_sec=_opt_num(
+            data, "approach_stall_blacklist_sec", ctx,
+            default=defaults.approach_stall_blacklist_sec,
+        ),
+        ks_guard_min_dist=_opt_int(
+            data, "ks_guard_min_dist", ctx,
+            default=defaults.ks_guard_min_dist,
+        ),
+        ks_guard_min_hp_deficit=_opt_int(
+            data, "ks_guard_min_hp_deficit", ctx,
+            default=defaults.ks_guard_min_hp_deficit,
+        ),
+        ks_guard_blacklist_sec=_opt_num(
+            data, "ks_guard_blacklist_sec", ctx,
+            default=defaults.ks_guard_blacklist_sec,
+        ),
+        abandon_target_key=_parse_optional_abandon_target_key(
+            data, ctx,
+            default=defaults.abandon_target_key,
         ),
     )
 

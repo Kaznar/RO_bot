@@ -18,6 +18,7 @@ from ro_bot.hunt.config import (
     EscapeConfig,
     HealConfig,
     IdleActionConfig,
+    OverweightConfig,
     ReturnToFarmConfig,
 )
 
@@ -34,6 +35,7 @@ class Profile:
     buffs: tuple[BuffSpec, ...] = ()
     heal: HealConfig | None = None
     idle_action: IdleActionConfig | None = None
+    overweight: OverweightConfig | None = None
     escape: EscapeConfig | None = None
     engagement: EngagementConfig = field(default_factory=EngagementConfig)
     return_to_farm: ReturnToFarmConfig | None = None
