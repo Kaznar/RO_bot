@@ -8,6 +8,7 @@ last click timestamp so callers can enforce re-click cooldowns.
 from __future__ import annotations
 
 import logging
+import random
 import time
 
 from ro_bot.core.hid.bridge import HidBridge
@@ -76,6 +77,24 @@ class AimService:
         except Exception:
             logger.exception("move_mouse failed")
 
+    def shake_mouse(self, moves: int = 6, max_delta: int = 8) -> None:
+        """Send short relative moves without clicking.
+
+        Some RO clients ignore repeated ground clicks until the cursor nudges;
+        call before retry clicks during navigation.
+        """
+        cap = max(1, max_delta)
+        for _ in range(max(1, moves)):
+            dx = random.randint(-cap, cap)
+            dy = random.randint(-cap, cap)
+            if dx == 0 and dy == 0:
+                dx = random.choice((-1, 1))
+            try:
+                self._bridge.move_mouse(dx, dy)
+            except Exception:
+                logger.exception("shake_mouse move failed")
+                return
+
     def click(self) -> None:
         """Left-click and bump the click timestamp."""
         try:
@@ -89,10 +108,21 @@ class AimService:
         player_cell: tuple[int, int],
         mob_cell: tuple[int, int],
         target_name: str | None = None,
+        *,
+        aim_settle_sec: float | None = None,
     ) -> None:
-        """Move → settle → click, in one call."""
+        """Move → optional settle → click.
+
+        ``aim_settle_sec``: override profile settle for this click only;
+        ``None`` uses the hunt engagement default. Pass ``0.0`` for ground
+        walk clicks where delay must be minimal.
+        """
         self.move(player_cell, mob_cell, target_name=target_name)
-        time.sleep(self._aim_settle_sec)
+        settle = (
+            self._aim_settle_sec if aim_settle_sec is None else aim_settle_sec
+        )
+        if settle > 0:
+            time.sleep(settle)
         self.click()
 
     def shift_timestamps(self, delta: float) -> None:

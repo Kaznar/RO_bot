@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any
 
 from ro_bot.app.config.defaults import DEFAULTS, DEFAULT_MANUAL_CONTROL_MAPS
+from ro_bot.app.config.route_library import (
+    RouteLibraryError,
+    compose_waypoints,
+    load_route_library,
+    resolve_library_path,
+)
 from ro_bot.app.models.profile import Profile
 from ro_bot.app.models.server import Server
 from ro_bot.core.projection.camera import CameraProjection
@@ -26,6 +32,8 @@ from ro_bot.hunt.config import (
     BuffSpec,
     EngagementConfig,
     EscapeConfig,
+    FarmHomeRouteConfig,
+    FarmRouteWaypoint,
     FarmTransition,
     HealConfig,
     IdleActionConfig,
@@ -77,6 +85,7 @@ def load_config(path: Path) -> Profile:
         _req(data, "profile", ctx, dict),
         server=server,
         ctx=f"{ctx} [profile]",
+        config_dir=path.parent,
     )
     return profile
 
@@ -137,7 +146,13 @@ def _parse_dead_zones(
     return tuple(zones)
 
 
-def _parse_profile(data: dict, *, server: Server, ctx: str) -> Profile:
+def _parse_profile(
+    data: dict,
+    *,
+    server: Server,
+    ctx: str,
+    config_dir: Path,
+) -> Profile:
     mobs = _req(data, "mobs", ctx, dict)
     allowed_mobs = _parse_str_list(
         _req(mobs, "allowed", f"{ctx}.mobs", list),
@@ -204,7 +219,9 @@ def _parse_profile(data: dict, *, server: Server, ctx: str) -> Profile:
             data.get("engagement"), f"{ctx}.engagement",
         ),
         return_to_farm=_parse_return_to_farm(
-            data.get("return_to_farm"), f"{ctx}.return_to_farm",
+            data.get("return_to_farm"),
+            f"{ctx}.return_to_farm",
+            config_dir=config_dir,
         ),
     )
 
@@ -331,7 +348,12 @@ def _parse_escape(data: Any, ctx: str) -> EscapeConfig | None:
     )
 
 
-def _parse_return_to_farm(data: Any, ctx: str) -> ReturnToFarmConfig | None:
+def _parse_return_to_farm(
+    data: Any,
+    ctx: str,
+    *,
+    config_dir: Path,
+) -> ReturnToFarmConfig | None:
     if data is None:
         return None
     if not isinstance(data, dict):
@@ -355,12 +377,29 @@ def _parse_return_to_farm(data: Any, ctx: str) -> ReturnToFarmConfig | None:
         )
     else:
         active_farm_map = active_raw.strip() or None
+    home_route = _parse_farm_home_route(
+        data.get("home_route"),
+        f"{ctx}.home_route",
+        active_farm_map=active_farm_map,
+        config_dir=config_dir,
+    )
+    if "home_navigation_enabled" in data:
+        hne = data["home_navigation_enabled"]
+        if not isinstance(hne, bool):
+            raise ConfigError(f"{ctx}.home_navigation_enabled: expected boolean")
+        home_navigation_enabled = hne
+    else:
+        home_navigation_enabled = defaults.home_navigation_enabled
     return ReturnToFarmConfig(
         walk_cells=_opt_int(
             data, "walk_cells", ctx, default=defaults.walk_cells,
         ),
         settle_sec=_opt_num(
             data, "settle_sec", ctx, default=defaults.settle_sec,
+        ),
+        post_map_change_grace_sec=_opt_num(
+            data, "post_map_change_grace_sec", ctx,
+            default=defaults.post_map_change_grace_sec,
         ),
         retry_sec=_opt_num(
             data, "retry_sec", ctx, default=defaults.retry_sec,
@@ -370,6 +409,129 @@ def _parse_return_to_farm(data: Any, ctx: str) -> ReturnToFarmConfig | None:
         ),
         transitions=transitions,
         active_farm_map=active_farm_map,
+        home_route=home_route,
+        home_navigation_enabled=home_navigation_enabled,
+    )
+
+
+def _parse_farm_home_route(
+    data: Any,
+    ctx: str,
+    *,
+    active_farm_map: str | None,
+    config_dir: Path,
+) -> FarmHomeRouteConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    home_map_raw = _req(data, "home_map", ctx, str).strip()
+    if not home_map_raw:
+        raise ConfigError(f"{ctx}.home_map: must be a non-empty string")
+    compose_raw = data.get("compose")
+    waypoints_raw = data.get("waypoints")
+    has_compose = compose_raw is not None
+    has_inline = waypoints_raw is not None
+    if has_compose == has_inline:
+        raise ConfigError(
+            f"{ctx}: set exactly one of 'compose' (segment names) or "
+            "'waypoints' (inline list)",
+        )
+    if has_compose:
+        if not isinstance(compose_raw, list) or not compose_raw:
+            raise ConfigError(
+                f"{ctx}.compose: expected non-empty array of segment name strings",
+            )
+        names: list[str] = []
+        for i, entry in enumerate(compose_raw):
+            if not isinstance(entry, str) or not entry.strip():
+                raise ConfigError(
+                    f"{ctx}.compose[{i}]: expected non-empty string",
+                )
+            names.append(entry.strip())
+        lib_rel = data.get("route_library")
+        if lib_rel is not None and not isinstance(lib_rel, str):
+            raise ConfigError(f"{ctx}.route_library: expected string path or omitted")
+        lib_path = resolve_library_path(config_dir, lib_rel)
+        try:
+            library = load_route_library(lib_path, str(lib_path))
+            wps = compose_waypoints(names, library, ctx)
+        except RouteLibraryError as e:
+            raise ConfigError(str(e)) from e
+    else:
+        assert waypoints_raw is not None
+        if not isinstance(waypoints_raw, list) or len(waypoints_raw) < 2:
+            raise ConfigError(
+                f"{ctx}.waypoints: expected array with at least 2 entries",
+            )
+        w_ctx = f"{ctx}.waypoints"
+        wps = []
+        for i, entry in enumerate(waypoints_raw):
+            item_ctx = f"{w_ctx}[{i}]"
+            if not isinstance(entry, dict):
+                raise ConfigError(f"{item_ctx}: must be a JSON object")
+            m_raw = _req(entry, "map", item_ctx, str).strip()
+            if not m_raw:
+                raise ConfigError(f"{item_ctx}.map: must be a non-empty string")
+            wps.append(FarmRouteWaypoint(
+                map_name=m_raw,
+                x=_req_int(entry, "x", item_ctx),
+                y=_req_int(entry, "y", item_ctx),
+            ))
+    if len(wps) < 2:
+        raise ConfigError(
+            f"{ctx}: need at least 2 waypoints after "
+            f"{'composition' if has_compose else 'parsing'} "
+            f"(got {len(wps)})",
+        )
+    wp_ctx = f"{ctx}.waypoints" if has_inline else f"{ctx} (composed)"
+    if wps[0].map_name != home_map_raw:
+        raise ConfigError(
+            f"{wp_ctx}[0].map: must equal {ctx}.home_map "
+            f"({home_map_raw!r}) — got {wps[0].map_name!r}",
+        )
+    farm = (active_farm_map or "").strip()
+    if not farm:
+        raise ConfigError(
+            f"{ctx}: requires profile.return_to_farm.active_farm_map "
+            "when home_route is set",
+        )
+    if wps[-1].map_name != farm:
+        raise ConfigError(
+            f"{wp_ctx}[{len(wps) - 1}].map: must equal active_farm_map "
+            f"({farm!r}) — got {wps[-1].map_name!r}",
+        )
+    if "enabled" in data:
+        en_raw = data["enabled"]
+        if not isinstance(en_raw, bool):
+            raise ConfigError(f"{ctx}.enabled: expected boolean")
+        enabled = en_raw
+    else:
+        enabled = True
+    return FarmHomeRouteConfig(
+        home_map=home_map_raw,
+        waypoints=tuple(wps),
+        enabled=enabled,
+        click_cooldown_sec=_opt_num(
+            data, "click_cooldown_sec", ctx,
+            default=2.5,
+        ),
+        arrival_radius_cells=_opt_int(
+            data, "arrival_radius_cells", ctx,
+            default=2,
+        ),
+        stuck_no_move_timeout_sec=_opt_num(
+            data, "stuck_no_move_timeout_sec", ctx,
+            default=1.0,
+        ),
+        stuck_max_attempts_per_waypoint=_opt_int(
+            data, "stuck_max_attempts_per_waypoint", ctx,
+            default=24,
+        ),
+        post_map_change_grace_sec=_opt_num(
+            data, "post_map_change_grace_sec", ctx,
+            default=3.0,
+        ),
     )
 
 

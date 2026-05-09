@@ -35,6 +35,7 @@ from ro_bot.core.window import (
 from ro_bot.hunt.aim_service import AimService
 from ro_bot.hunt.config import HuntConfig
 from ro_bot.hunt.controller import HuntController
+from ro_bot.hunt.routes import augment_return_to_farm_from_registry
 from ro_bot.hunt.dead_zones.filter import DeadZoneFilter
 
 logger = logging.getLogger(__name__)
@@ -238,7 +239,9 @@ class BotSession:
             idle_action=p.idle_action,
             overweight=p.overweight,
             escape=p.escape,
-            return_to_farm=p.return_to_farm,
+            return_to_farm=augment_return_to_farm_from_registry(
+                p.return_to_farm,
+            ),
             buffs=p.buffs,
         )
         if self._hunt_all:

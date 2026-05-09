@@ -44,6 +44,7 @@ from ro_bot.hunt.config import HuntConfig
 from ro_bot.hunt.constants import (
     ENGAGED_POLL_SEC,
     IDLE_POLL_SEC,
+    NAVIGATION_POLL_SEC,
     NO_CANDIDATE_LOG_INTERVAL_SEC,
     WEIGHT_SNAPSHOT_INTERVAL_SEC,
 )
@@ -59,6 +60,7 @@ from ro_bot.hunt.policies.overweight import OverweightPolicy
 from ro_bot.hunt.policies.approach_stall import ApproachStallPolicy
 from ro_bot.hunt.policies.path_stuck import PathStuckPolicy
 from ro_bot.hunt.policies.remote_contested import RemoteContestedPolicy
+from ro_bot.hunt.policies.farm_home_route import FarmHomeRoutePolicy
 from ro_bot.hunt.policies.return_to_farm import ReturnToFarmPolicy
 from ro_bot.hunt.policies.targeting import collect_candidates, pick_nearest
 
@@ -135,6 +137,9 @@ class HuntController:
             and cfg.return_to_farm.transitions
             else None
         )
+        self._farm_home_route = self._make_farm_home_route_policy(
+            cfg, aim, player_reader,
+        )
 
         self._dead_zone_filter = dead_zone_filter
 
@@ -163,6 +168,21 @@ class HuntController:
         self._pending_warp_return_idle_reason: str | None = None
         #: Previous ``map_name`` from the last sniffer map callback (0091).
         self._map_change_listener_prev: str | None = None
+
+    @staticmethod
+    def _make_farm_home_route_policy(
+        cfg: HuntConfig,
+        aim: AimService,
+        player_reader: PlayerReader,
+    ) -> FarmHomeRoutePolicy | None:
+        rtf = cfg.return_to_farm
+        if rtf is None or rtf.home_route is None:
+            return None
+        hr = rtf.home_route
+        farm = (rtf.active_farm_map or "").strip()
+        if not hr.enabled or len(hr.waypoints) < 2 or not farm:
+            return None
+        return FarmHomeRoutePolicy(rtf, aim, player_reader)
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -237,6 +257,8 @@ class HuntController:
             self._escape.shift(delta)
         if self._return_to_farm is not None:
             self._return_to_farm.shift(delta)
+        if self._farm_home_route is not None:
+            self._farm_home_route.shift(delta)
         if self._overweight is not None:
             self._overweight.shift(delta)
         if self._last_no_candidate_log:
@@ -252,6 +274,11 @@ class HuntController:
     def tick_interval_sec(self) -> float:
         if self._pause.is_paused:
             return IDLE_POLL_SEC
+        if (
+            self._farm_home_route is not None
+            and self._farm_home_route.is_active()
+        ):
+            return NAVIGATION_POLL_SEC
         return (
             ENGAGED_POLL_SEC
             if self._engagement.state.gid is not None
@@ -295,7 +322,11 @@ class HuntController:
                 self._pending_warp_return_idle_reason = None
                 return
 
-        if self._is_manual_control_map(current_map):
+        route_automates = (
+            self._farm_home_route is not None
+            and self._farm_home_route.should_automate_on_map(current_map)
+        )
+        if self._is_manual_control_map(current_map) and not route_automates:
             self._enter_manual_control_mode(current_map)
             return
         self._leave_manual_control_mode(current_map)
@@ -314,6 +345,13 @@ class HuntController:
         if self._escape is not None and self._escape.press_if_ready(now):
             self._handle_escape_tick()
             return
+
+        if self._farm_home_route is not None:
+            self._farm_home_route.tick(now, current_map)
+            if self._farm_home_route.is_active():
+                if self._engagement.state.gid is not None:
+                    self._engagement.state.clear()
+                return
 
         if self._return_to_farm is not None and self._return_to_farm.is_active():
             if self._engagement.state.gid is not None:
@@ -381,8 +419,16 @@ class HuntController:
         self._dead_zone_blocked_since = None
         if self._idle is not None:
             self._idle.on_map_reset()
+        if self._farm_home_route is not None:
+            self._farm_home_route.on_map_change(map_name, time.monotonic())
         if self._return_to_farm is not None:
-            self._return_to_farm.on_map_change(map_name, time.monotonic())
+            if (
+                self._farm_home_route is not None
+                and self._farm_home_route.is_active()
+            ):
+                self._return_to_farm.disarm()
+            else:
+                self._return_to_farm.on_map_change(map_name, time.monotonic())
         if self._overweight is not None:
             self._overweight.on_map_reset()
 

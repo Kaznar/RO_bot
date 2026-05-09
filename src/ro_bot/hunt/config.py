@@ -80,6 +80,47 @@ class EscapeConfig:
 
 
 @dataclass(frozen=True)
+class FarmRouteWaypoint:
+    """One cell target on a named map (RO grid coordinates)."""
+    map_name: str
+    x: int
+    y: int
+
+
+@dataclass(frozen=True)
+class FarmHomeRouteConfig:
+    """Ordered path from ``home_map`` to ``ReturnToFarmConfig.active_farm_map``.
+
+    Built either from inline ``waypoints`` in the profile JSON or from
+    ``compose``: an ordered list of segment names resolved via
+    ``route_library.json`` (see ``app.config.route_library``).
+
+    First waypoint must lie on ``home_map``; last must lie on the active
+    farm map. The controller exempts ``home_map`` from manual-control
+    suspension while this route is armed or eligible to arm.
+
+    Set ``enabled`` false to stay fully manual in town without removing
+    waypoint data from the profile.
+
+    ``stuck_*`` — if memory shows the player cell has not changed for
+    ``stuck_no_move_timeout_sec``, jiggle the HID cursor then issue a recovery
+    click one grid step toward the waypoint. Earlier repeats use the same
+    mouse jitter when idle exceeds ~45% of that timeout (client false rejects).
+    """
+    home_map: str
+    waypoints: tuple[FarmRouteWaypoint, ...]
+    enabled: bool = True
+    click_cooldown_sec: float = 2.5
+    #: Chebyshev distance (max of dx, dy) to count as arrived at a waypoint.
+    arrival_radius_cells: int = 2
+    stuck_no_move_timeout_sec: float = 1.0
+    stuck_max_attempts_per_waypoint: int = 24
+    #: After each 0091 map change (and when the route first arms), skip ground
+    #: clicks until this many seconds pass so the client can finish loading.
+    post_map_change_grace_sec: float = 3.0
+
+
+@dataclass(frozen=True)
 class FarmTransition:
     """One neighbor-map escape → farm-map recovery rule.
 
@@ -122,15 +163,29 @@ class ReturnToFarmConfig:
     **is** that farm. Omit or leave empty for legacy behavior (single global
     lookup by neighbor name — fragile if one neighbor appears in multiple
     blocks).
+
+    ``home_route`` (optional) runs :class:`FarmHomeRoutePolicy`: click path
+    from ``home_map`` through any intermediate maps to the final cell on
+    ``active_farm_map``. Requires a non-empty ``active_farm_map``.
+
+    ``home_navigation_enabled`` — when false, ``home_route`` is cleared at
+    session build (no town→farm clicks); use while recording a path manually.
+    JSON ``home_route`` is ignored while disabled. Neighbor walk-back still
+    follows ``maps`` unless you clear those transitions.
     """
     walk_cells: int = 10
     settle_sec: float = 1.5
+    #: Minimum wait after a map change before walk-back clicks (with settle_sec).
+    post_map_change_grace_sec: float = 3.0
     retry_sec: float = 5.0
     max_retries: int = 4
     transitions: tuple[FarmTransition, ...] = ()
     #: When set, only return toward this farm map; standing on this map
     #: never arms walk-back.
     active_farm_map: str | None = None
+    home_route: FarmHomeRouteConfig | None = None
+    #: Town→farm waypoint navigation (registry or JSON ``home_route``).
+    home_navigation_enabled: bool = True
 
 
 @dataclass(frozen=True)

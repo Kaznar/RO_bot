@@ -149,6 +149,7 @@
       }
     ],
     "return_to_farm": {
+      "home_navigation_enabled": true,
       "walk_cells": 3,
       "settle_sec": 1.5,
       "retry_sec": 5.0,

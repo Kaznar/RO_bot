@@ -115,6 +115,10 @@ class ReturnToFarmPolicy:
         """True while we are trying to escape a neighbor map."""
         return self._active is not None
 
+    def disarm(self) -> None:
+        """Clear walk-back state (e.g. when home-route navigation owns movement)."""
+        self._active = None
+
     def on_map_change(self, map_name: str, now: float) -> None:
         """Called from the controller for every map change event."""
         transition = self._resolve_transition(map_name)
@@ -132,11 +136,15 @@ class ReturnToFarmPolicy:
         # retry loop on this same map — keep quiet, stay disarmed.
         if self._given_up_on == map_name:
             return
+        delay = max(
+            self._cfg.settle_sec,
+            max(0.0, self._cfg.post_map_change_grace_sec),
+        )
         logger.info(
             "Return-to-farm: arrived on neighbor '%s' of farm '%s' → "
             "will walk '%s' in %.1fs",
             map_name, transition.farm_map, transition.direction,
-            self._cfg.settle_sec,
+            delay,
         )
         self._active = _ActiveReturn(
             transition=transition,
@@ -150,7 +158,11 @@ class ReturnToFarmPolicy:
         state = self._active
         if state is None:
             return
-        if now - state.armed_at < self._cfg.settle_sec:
+        delay = max(
+            self._cfg.settle_sec,
+            max(0.0, self._cfg.post_map_change_grace_sec),
+        )
+        if now - state.armed_at < delay:
             return
         last = state.last_click_at
         if last is not None and now - last < self._cfg.retry_sec:

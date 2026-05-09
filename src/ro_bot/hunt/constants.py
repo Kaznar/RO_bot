@@ -14,6 +14,9 @@ IDLE_POLL_SEC: float = 0.2
 # Tick rate while engaged — faster so re-aim reacts quickly to mob walks.
 ENGAGED_POLL_SEC: float = 0.05
 
+# Tick rate while :class:`FarmHomeRoutePolicy` drives movement (tight loop).
+NAVIGATION_POLL_SEC: float = 0.05
+
 # Throttle for the "no candidates visible" log line.
 NO_CANDIDATE_LOG_INTERVAL_SEC: float = 5.0
 
