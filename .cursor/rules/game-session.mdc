@@ -1,0 +1,19 @@
+---
+description: RO_bot CLI — start early, wait until user is logged in and in-world
+alwaysApply: true
+---
+
+# Game client and CLI workflow
+
+- **`ro-bot` subcommands** (`hunt`, `home-prep`, `home-prep-dev`, and any future
+  entrypoints) assume a **live game client** with the configured character **past
+  character select** and **in the world** (not loading screen, not title menu).
+- When the **agent runs** these commands or validates behaviour: **start the
+  command / session first**, then **wait** (poll, timeout, or reuse helpers such
+  as `wait_prep_until_in_world` in `app/prep_log_runner.py`) until sniffer map +
+  player memory look **playable** before assuming success or driving timed
+  sequences. Do **not** assume the user is already logged in.
+- When **documenting or suggesting** steps to the user: state explicitly that
+  they must **log in and enter the world** before prep / hunt logic is
+  meaningful; prefer **wait-until-ready** flows over “run this now” without that
+  guard.

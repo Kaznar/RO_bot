@@ -42,10 +42,15 @@ def augment_return_to_farm_from_registry(
     from dataclasses import replace
 
     if not rtf.home_navigation_enabled:
-        return replace(rtf, home_route=None)
+        return replace(rtf, home_route=None, home_prep=None)
     if rtf.home_route is not None:
         return rtf
     plan = resolve_farm_return_plan(rtf.active_farm_map)
     if plan is None:
         return rtf
-    return replace(rtf, home_route=plan.as_home_route_config())
+    merged_prep = rtf.home_prep if rtf.home_prep is not None else plan.home_prep
+    return replace(
+        rtf,
+        home_route=plan.as_home_route_config(),
+        home_prep=merged_prep,
+    )

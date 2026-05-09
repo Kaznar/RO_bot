@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Ragnarok Online hunting bot (Arduino HID, packet sniffer, process memory)."
 requires-python = ">=3.12"
 dependencies = [
+    "pynput",
     "pyserial",
     "pywin32",
     "scapy",

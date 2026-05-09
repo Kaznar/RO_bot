@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ro_bot.hunt.config import FarmHomeRouteConfig, FarmRouteWaypoint
+from ro_bot.hunt.config import FarmHomeRouteConfig, FarmRouteWaypoint, HomePrepConfig
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,7 @@ class FarmReturnPlan:
     stuck_no_move_timeout_sec: float = 1.0
     stuck_max_attempts_per_waypoint: int = 24
     post_map_change_grace_sec: float = 3.0
+    home_prep: HomePrepConfig | None = None
 
     def __post_init__(self) -> None:
         hm = self.home_map.strip()

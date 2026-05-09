@@ -35,6 +35,7 @@ from ro_bot.core.window import (
 from ro_bot.hunt.aim_service import AimService
 from ro_bot.hunt.config import HuntConfig
 from ro_bot.hunt.controller import HuntController
+from ro_bot.hunt.policies.home_prep import HomePrepPolicy
 from ro_bot.hunt.routes import augment_return_to_farm_from_registry
 from ro_bot.hunt.dead_zones.filter import DeadZoneFilter
 
@@ -77,6 +78,7 @@ class BotSession:
         self._tracker: EntityTracker | None = None
         self._controller: HuntController | None = None
         self._rect: WindowRect | None = None
+        self._hwnd: int | None = None
 
     @property
     def controller(self) -> HuntController:
@@ -89,6 +91,45 @@ class BotSession:
         if self._rect is None:
             raise RuntimeError("BotSession not started")
         return self._rect
+
+    @property
+    def sniffer(self) -> PacketSniffer:
+        if self._sniffer is None:
+            raise RuntimeError("BotSession not started")
+        return self._sniffer
+
+    @property
+    def player_reader(self) -> PlayerReader:
+        if self._player_reader is None:
+            raise RuntimeError("BotSession not started")
+        return self._player_reader
+
+    @property
+    def hunt_config(self) -> HuntConfig:
+        """Effective :class:`HuntConfig` (same as :class:`HuntController` uses)."""
+        return self._build_hunt_config()
+
+    def make_home_prep_policy(
+        self,
+        *,
+        force_enabled: bool = False,
+    ) -> HomePrepPolicy | None:
+        """Same prep policy wiring as :class:`HuntController` (standalone ``home-prep``)."""
+        if self._bridge is None or self._rect is None or self._player_reader is None:
+            raise RuntimeError("BotSession not started")
+        cfg = self._build_hunt_config()
+        aim = AimService(
+            bridge=self._bridge,
+            projection=self._profile.server.projection,
+            rect=self._rect,
+            aim_settle_sec=cfg.engagement.aim_settle_sec,
+            aim_offsets=cfg.aim_offsets,
+        )
+        return HuntController.make_home_prep_policy(
+            cfg, self._bridge, self._player_reader, aim,
+            force_enabled=force_enabled,
+            game_hwnd=self._hwnd,
+        )
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -148,10 +189,10 @@ class BotSession:
     # ── Build steps ─────────────────────────────────────────────────
 
     def _resolve_window(self) -> WindowRect:
-        hwnd = wait_for_game_window(
+        self._hwnd = wait_for_game_window(
             self._profile.server.window_title, timeout=120.0,
         )
-        rect = get_client_rect(hwnd)
+        rect = get_client_rect(self._hwnd)
 
         mouse_accel = MouseAcceleration()
         mouse_accel.disable()
@@ -161,6 +202,7 @@ class BotSession:
     def _clear_window(self) -> None:
         # Placeholder for future window-specific cleanup.
         self._rect = None
+        self._hwnd = None
 
     def _start_bridge(self, rect: WindowRect) -> HidBridge:
         bridge = ArduinoHidBridge()
@@ -219,6 +261,7 @@ class BotSession:
             player_reader=player_reader,
             aim=aim,
             dead_zone_filter=dead_zone_filter,
+            game_hwnd=self._hwnd,
         )
 
     def _build_hunt_config(self) -> HuntConfig:

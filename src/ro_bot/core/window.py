@@ -11,7 +11,9 @@ import logging
 import time
 from dataclasses import dataclass
 
+import win32con
 import win32gui
+import win32ui
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,97 @@ def get_cursor_pos() -> tuple[int, int]:
     pt = ctypes.wintypes.POINT()
     _user32.GetCursorPos(ctypes.byref(pt))
     return pt.x, pt.y
+
+
+def _sample_client_pixel_rgb_getpixel(
+    hwnd: int,
+    client_x: int,
+    client_y: int,
+) -> tuple[int, int, int] | None:
+    hdc = win32gui.GetDC(hwnd)
+    if not hdc:
+        return None
+    try:
+        rgb = win32gui.GetPixel(hdc, client_x, client_y)
+    finally:
+        win32gui.ReleaseDC(hwnd, hdc)
+    if rgb == -1 or rgb == 0xFFFFFFFF:
+        return None
+    r = rgb & 0xFF
+    g = (rgb >> 8) & 0xFF
+    b = (rgb >> 16) & 0xFF
+    return (r, g, b)
+
+
+def _sample_client_pixel_rgb_bitblt(
+    hwnd: int,
+    client_x: int,
+    client_y: int,
+) -> tuple[int, int, int] | None:
+    """Copy 1×1 from the client DC via ``BitBlt`` (often sees UI where
+    ``GetPixel`` returns black on GPU-presented game clients).
+    """
+    hdc_raw = win32gui.GetDC(hwnd)
+    if not hdc_raw:
+        return None
+    src_dc = win32ui.CreateDCFromHandle(hdc_raw)
+    mem_dc = src_dc.CreateCompatibleDC()
+    bmp = win32ui.CreateBitmap()
+    bmp.CreateCompatibleBitmap(src_dc, 1, 1)
+    old_bmp = mem_dc.SelectObject(bmp)
+    try:
+        ok = mem_dc.BitBlt(
+            (0, 0),
+            (1, 1),
+            src_dc,
+            (client_x, client_y),
+            win32con.SRCCOPY,
+        )
+        if not ok:
+            return None
+        bits = bmp.GetBitmapBits(True)
+    finally:
+        mem_dc.SelectObject(old_bmp)
+        mem_dc.DeleteDC()
+        bmp.DeleteObject()
+        src_dc.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hdc_raw)
+    if len(bits) < 4:
+        return None
+    b, g, r = bits[0], bits[1], bits[2]
+    return (r, g, b)
+
+
+def sample_client_pixel_rgb(
+    hwnd: int,
+    client_x: int,
+    client_y: int,
+) -> tuple[int, int, int] | None:
+    """Read one client pixel as ``(R, G, B)``.
+
+    Tries ``BitBlt`` first (better for some Direct3D/OpenGL windowed clients),
+    then ``GetPixel``. If both succeed, returns the sample with the higher
+    ``max(R, G, B)`` so a bogus black ``GetPixel`` does not hide a bright UI.
+    """
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return None
+    try:
+        blt = _sample_client_pixel_rgb_bitblt(hwnd, client_x, client_y)
+    except Exception:
+        logger.debug("sample_client_pixel_rgb: BitBlt failed", exc_info=True)
+        blt = None
+    try:
+        pix = _sample_client_pixel_rgb_getpixel(hwnd, client_x, client_y)
+    except Exception:
+        logger.debug("sample_client_pixel_rgb: GetPixel failed", exc_info=True)
+        pix = None
+    if blt is None:
+        return pix
+    if pix is None:
+        return blt
+    if max(blt) >= max(pix):
+        return blt
+    return pix
 
 
 # ── Mouse acceleration management ────────────────────────────────────

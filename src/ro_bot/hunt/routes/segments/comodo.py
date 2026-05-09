@@ -18,8 +18,6 @@ class ComodoPaths:
     def from_resp_after_h_to_beach_dun3() -> tuple[FarmRouteWaypoint, ...]:
         """Storage ``h`` landing → beach_dun3 warp (sniffer ``Player move`` trail)."""
         return (
-            FarmRouteWaypoint("comodo", 203, 142),
-            FarmRouteWaypoint("comodo", 214, 146),
             FarmRouteWaypoint("comodo", 222, 156),
             FarmRouteWaypoint("comodo", 236, 158),
             FarmRouteWaypoint("comodo", 250, 167),

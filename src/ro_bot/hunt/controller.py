@@ -29,6 +29,7 @@ This file is the glue.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 
@@ -61,6 +62,7 @@ from ro_bot.hunt.policies.approach_stall import ApproachStallPolicy
 from ro_bot.hunt.policies.path_stuck import PathStuckPolicy
 from ro_bot.hunt.policies.remote_contested import RemoteContestedPolicy
 from ro_bot.hunt.policies.farm_home_route import FarmHomeRoutePolicy
+from ro_bot.hunt.policies.home_prep import HomePrepPolicy
 from ro_bot.hunt.policies.return_to_farm import ReturnToFarmPolicy
 from ro_bot.hunt.policies.targeting import collect_candidates, pick_nearest
 
@@ -80,12 +82,14 @@ class HuntController:
         player_reader: PlayerReader,
         aim: AimService,
         dead_zone_filter: DeadZoneFilter,
+        game_hwnd: int | None = None,
     ) -> None:
         self._cfg = cfg
         self._bridge = bridge
         self._sniffer = sniffer
         self._tracker = tracker
         self._player_reader = player_reader
+        self._game_hwnd = game_hwnd
 
         self._events = EventBus()
         self._cells = CellObserver(cfg.engagement.target_settle_sec)
@@ -140,6 +144,9 @@ class HuntController:
         self._farm_home_route = self._make_farm_home_route_policy(
             cfg, aim, player_reader,
         )
+        self._home_prep = HuntController.make_home_prep_policy(
+            cfg, bridge, player_reader, aim, game_hwnd=self._game_hwnd,
+        )
 
         self._dead_zone_filter = dead_zone_filter
 
@@ -183,6 +190,31 @@ class HuntController:
         if not hr.enabled or len(hr.waypoints) < 2 or not farm:
             return None
         return FarmHomeRoutePolicy(rtf, aim, player_reader)
+
+    @staticmethod
+    def make_home_prep_policy(
+        cfg: HuntConfig,
+        bridge: HidBridge,
+        player_reader: PlayerReader,
+        aim: AimService,
+        *,
+        force_enabled: bool = False,
+        game_hwnd: int | None = None,
+    ) -> HomePrepPolicy | None:
+        rtf = cfg.return_to_farm
+        if rtf is None or rtf.home_route is None:
+            return None
+        hp = rtf.home_prep
+        if hp is None or not hp.steps:
+            return None
+        if not hp.enabled and not force_enabled:
+            return None
+        if force_enabled and not hp.enabled:
+            hp_on = dataclasses.replace(hp, enabled=True)
+            rtf = dataclasses.replace(rtf, home_prep=hp_on)
+        return HomePrepPolicy(
+            rtf, bridge, player_reader, aim, game_hwnd=game_hwnd,
+        )
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -259,6 +291,8 @@ class HuntController:
             self._return_to_farm.shift(delta)
         if self._farm_home_route is not None:
             self._farm_home_route.shift(delta)
+        if self._home_prep is not None:
+            self._home_prep.shift(delta)
         if self._overweight is not None:
             self._overweight.shift(delta)
         if self._last_no_candidate_log:
@@ -274,6 +308,12 @@ class HuntController:
     def tick_interval_sec(self) -> float:
         if self._pause.is_paused:
             return IDLE_POLL_SEC
+        current_map = self._sniffer.get_map_name() or "?"
+        if (
+            self._home_prep is not None
+            and self._home_prep.suppress_farm_home_route_navigation(current_map)
+        ):
+            return NAVIGATION_POLL_SEC
         if (
             self._farm_home_route is not None
             and self._farm_home_route.is_active()
@@ -346,8 +386,17 @@ class HuntController:
             self._handle_escape_tick()
             return
 
+        prep_suppress = False
+        if self._home_prep is not None:
+            self._home_prep.tick(now, current_map)
+            prep_suppress = self._home_prep.suppress_farm_home_route_navigation(
+                current_map,
+            )
+
         if self._farm_home_route is not None:
-            self._farm_home_route.tick(now, current_map)
+            self._farm_home_route.tick(
+                now, current_map, suppress_navigation=prep_suppress,
+            )
             if self._farm_home_route.is_active():
                 if self._engagement.state.gid is not None:
                     self._engagement.state.clear()

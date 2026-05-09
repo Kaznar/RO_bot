@@ -99,7 +99,13 @@ class FarmHomeRoutePolicy:
             if grace > 0:
                 st.suppress_clicks_until = now + grace
 
-    def tick(self, now: float, current_map: str) -> None:
+    def tick(
+        self,
+        now: float,
+        current_map: str,
+        *,
+        suppress_navigation: bool = False,
+    ) -> None:
         """Advance navigation. Safe every controller tick."""
         if not self.enabled():
             self._state = None
@@ -169,7 +175,7 @@ class FarmHomeRoutePolicy:
         grace = max(0.0, self._hr.post_map_change_grace_sec)
         if st.suppress_clicks_until is not None and now >= st.suppress_clicks_until:
             st.suppress_clicks_until = None
-        nav_suppressed = (
+        nav_suppressed = suppress_navigation or (
             grace > 0
             and st.suppress_clicks_until is not None
             and now < st.suppress_clicks_until

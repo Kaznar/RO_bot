@@ -48,7 +48,7 @@ class AimService:
     def move(
         self,
         player_cell: tuple[int, int],
-        mob_cell: tuple[int, int],
+        mob_cell: tuple[float, float],
         target_name: str | None = None,
     ) -> None:
         """Relative mouse move from current cursor to ``mob_cell``'s pixel."""
@@ -106,7 +106,7 @@ class AimService:
     def aim_and_click(
         self,
         player_cell: tuple[int, int],
-        mob_cell: tuple[int, int],
+        mob_cell: tuple[float, float],
         target_name: str | None = None,
         *,
         aim_settle_sec: float | None = None,
@@ -124,6 +124,99 @@ class AimService:
         if settle > 0:
             time.sleep(settle)
         self.click()
+
+    def _client_to_screen(self, client_xy: tuple[int, int]) -> tuple[int, int]:
+        return (
+            self._rect.left + client_xy[0],
+            self._rect.top + client_xy[1],
+        )
+
+    def click_client_pixel(
+        self,
+        client_xy: tuple[int, int],
+        *,
+        settle_sec: float = 0.06,
+    ) -> None:
+        """Move to client-relative pixel and LMB click (HUD / inventory)."""
+        target = self._client_to_screen(client_xy)
+        cur = get_cursor_pos()
+        self._bridge.move_mouse(target[0] - cur[0], target[1] - cur[1])
+        if settle_sec > 0:
+            time.sleep(settle_sec)
+        self.click()
+
+    def drag_map_cells(
+        self,
+        player_cell: tuple[int, int],
+        from_cell: tuple[float, float],
+        to_cell: tuple[float, float],
+        *,
+        segments: int = 16,
+        settle_before_down_sec: float = 0.06,
+        segment_pause_sec: float = 0.008,
+    ) -> None:
+        """LMB drag between two world cells (projection), same as client drag."""
+        p0 = clamp_to_rect(
+            self._projection.map_to_screen(player_cell, from_cell, self._rect),
+            self._rect,
+        )
+        p1 = clamp_to_rect(
+            self._projection.map_to_screen(player_cell, to_cell, self._rect),
+            self._rect,
+        )
+        cur = get_cursor_pos()
+        self._bridge.move_mouse(p0[0] - cur[0], p0[1] - cur[1])
+        if settle_before_down_sec > 0:
+            time.sleep(settle_before_down_sec)
+        try:
+            self._bridge.mouse_left_down()
+            for i in range(1, segments + 1):
+                t = i / segments
+                xt = int(p0[0] + (p1[0] - p0[0]) * t)
+                yt = int(p0[1] + (p1[1] - p0[1]) * t)
+                cur = get_cursor_pos()
+                self._bridge.move_mouse(xt - cur[0], yt - cur[1])
+                if segment_pause_sec > 0:
+                    time.sleep(segment_pause_sec)
+        finally:
+            try:
+                self._bridge.mouse_left_up()
+            except Exception:
+                logger.exception("drag_map_cells: mouse_left_up")
+        self._last_click_at = time.monotonic()
+
+    def drag_client_pixels(
+        self,
+        from_client: tuple[int, int],
+        to_client: tuple[int, int],
+        *,
+        segments: int = 14,
+        settle_before_down_sec: float = 0.06,
+        segment_pause_sec: float = 0.01,
+    ) -> None:
+        """LMB drag between two client-relative pixels (e.g. storage → inv)."""
+        p0 = self._client_to_screen(from_client)
+        p1 = self._client_to_screen(to_client)
+        cur = get_cursor_pos()
+        self._bridge.move_mouse(p0[0] - cur[0], p0[1] - cur[1])
+        if settle_before_down_sec > 0:
+            time.sleep(settle_before_down_sec)
+        try:
+            self._bridge.mouse_left_down()
+            for i in range(1, segments + 1):
+                t = i / segments
+                xt = int(p0[0] + (p1[0] - p0[0]) * t)
+                yt = int(p0[1] + (p1[1] - p0[1]) * t)
+                cur = get_cursor_pos()
+                self._bridge.move_mouse(xt - cur[0], yt - cur[1])
+                if segment_pause_sec > 0:
+                    time.sleep(segment_pause_sec)
+        finally:
+            try:
+                self._bridge.mouse_left_up()
+            except Exception:
+                logger.exception("drag_client_pixels: mouse_left_up")
+        self._last_click_at = time.monotonic()
 
     def shift_timestamps(self, delta: float) -> None:
         """Pause/resume support: slide ``last_click_at`` by ``delta``."""

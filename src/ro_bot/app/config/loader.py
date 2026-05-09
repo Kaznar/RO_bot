@@ -36,6 +36,8 @@ from ro_bot.hunt.config import (
     FarmRouteWaypoint,
     FarmTransition,
     HealConfig,
+    HomePrepConfig,
+    HomePrepStep,
     IdleActionConfig,
     OverweightConfig,
     ReturnToFarmConfig,
@@ -390,6 +392,9 @@ def _parse_return_to_farm(
         home_navigation_enabled = hne
     else:
         home_navigation_enabled = defaults.home_navigation_enabled
+    home_prep = _parse_home_prep(
+        data.get("home_prep"), f"{ctx}.home_prep",
+    )
     return ReturnToFarmConfig(
         walk_cells=_opt_int(
             data, "walk_cells", ctx, default=defaults.walk_cells,
@@ -411,6 +416,7 @@ def _parse_return_to_farm(
         active_farm_map=active_farm_map,
         home_route=home_route,
         home_navigation_enabled=home_navigation_enabled,
+        home_prep=home_prep,
     )
 
 
@@ -533,6 +539,324 @@ def _parse_farm_home_route(
             default=3.0,
         ),
     )
+
+
+def _parse_home_prep(data: Any, ctx: str) -> HomePrepConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    defaults = HomePrepConfig()
+    steps = _parse_home_prep_steps(
+        data.get("steps"), f"{ctx}.steps", required=True,
+    )
+    post_raw = data.get("post_steps")
+    post_steps = (
+        _parse_home_prep_steps(post_raw, f"{ctx}.post_steps", required=True)
+        if post_raw is not None
+        else ()
+    )
+    if "enabled" in data:
+        en = data["enabled"]
+        if not isinstance(en, bool):
+            raise ConfigError(f"{ctx}.enabled: expected boolean")
+        enabled = en
+    else:
+        enabled = defaults.enabled
+    return HomePrepConfig(
+        enabled=enabled,
+        steps=steps,
+        post_steps=post_steps,
+        finish_when_weight_ratio_below=_opt_num(
+            data,
+            "finish_when_weight_ratio_below",
+            ctx,
+            default=defaults.finish_when_weight_ratio_below,
+        ),
+        max_total_sec=_opt_num(
+            data, "max_total_sec", ctx, default=defaults.max_total_sec,
+        ),
+    )
+
+
+def _home_prep_map_coord(value: Any, ctx: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{ctx}: expected number")
+    return float(value)
+
+
+def _parse_home_prep_steps(
+    data: Any,
+    ctx: str,
+    *,
+    required: bool,
+) -> tuple[HomePrepStep, ...]:
+    if data is None:
+        if required:
+            raise ConfigError(f"{ctx}: required")
+        return ()
+    if not isinstance(data, list):
+        raise ConfigError(f"{ctx}: expected array")
+    out: list[HomePrepStep] = []
+    for i, entry in enumerate(data):
+        item_ctx = f"{ctx}[{i}]"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{item_ctx}: must be a JSON object")
+        key = _opt_str(entry, "key", item_ctx, default="")
+        delay_after_sec = _opt_num(
+            entry, "delay_after_sec", item_ctx, default=0.0,
+        )
+        cc_raw = entry.get("click_cell")
+        click_cell: tuple[float, float] | None = None
+        if cc_raw is not None:
+            cc_ctx = f"{item_ctx}.click_cell"
+            if isinstance(cc_raw, dict):
+                click_cell = (
+                    _home_prep_map_coord(cc_raw.get("x"), f"{cc_ctx}.x"),
+                    _home_prep_map_coord(cc_raw.get("y"), f"{cc_ctx}.y"),
+                )
+            elif (
+                isinstance(cc_raw, list)
+                and len(cc_raw) == 2
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                        for v in cc_raw)
+            ):
+                click_cell = (
+                    float(cc_raw[0]),
+                    float(cc_raw[1]),
+                )
+            else:
+                raise ConfigError(
+                    f"{item_ctx}.click_cell: expected {{x,y}} or [x,y] number pair",
+                )
+        ccdt_raw = entry.get("click_cell_drag_to")
+        click_cell_drag_to: tuple[float, float] | None = None
+        if ccdt_raw is not None:
+            dt_ctx = f"{item_ctx}.click_cell_drag_to"
+            if isinstance(ccdt_raw, dict):
+                click_cell_drag_to = (
+                    _home_prep_map_coord(ccdt_raw.get("x"), f"{dt_ctx}.x"),
+                    _home_prep_map_coord(ccdt_raw.get("y"), f"{dt_ctx}.y"),
+                )
+            elif (
+                isinstance(ccdt_raw, list)
+                and len(ccdt_raw) == 2
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                        for v in ccdt_raw)
+            ):
+                click_cell_drag_to = (float(ccdt_raw[0]), float(ccdt_raw[1]))
+            else:
+                raise ConfigError(
+                    f"{item_ctx}.click_cell_drag_to: "
+                    "expected {{x,y}} or [x,y] number pair",
+                )
+        ccdr_raw = entry.get("click_cell_drag_repeat_count")
+        if ccdr_raw is None:
+            click_cell_drag_repeat_count = 0
+        elif isinstance(ccdr_raw, int) and not isinstance(ccdr_raw, bool):
+            click_cell_drag_repeat_count = ccdr_raw
+        else:
+            raise ConfigError(
+                f"{item_ctx}.click_cell_drag_repeat_count: expected integer",
+            )
+        if click_cell_drag_repeat_count < 0:
+            raise ConfigError(
+                f"{item_ctx}.click_cell_drag_repeat_count: must be >= 0",
+            )
+        click_cell_drag_repeat_interval_sec = _opt_num(
+            entry,
+            "click_cell_drag_repeat_interval_sec",
+            item_ctx,
+            default=0.25,
+        )
+        if click_cell_drag_repeat_count > 0:
+            if click_cell is None or click_cell_drag_to is None:
+                raise ConfigError(
+                    f"{item_ctx}: click_cell_drag_repeat_count>0 requires "
+                    "click_cell and click_cell_drag_to",
+                )
+        if click_cell_drag_to is not None and click_cell_drag_repeat_count <= 0:
+            raise ConfigError(
+                f"{item_ctx}: click_cell_drag_to requires "
+                "click_cell_drag_repeat_count >= 1",
+            )
+        cl_raw = entry.get("click_client")
+        click_client: tuple[int, int] | None = None
+        if cl_raw is not None:
+            if isinstance(cl_raw, dict):
+                click_client = (
+                    _req_int(cl_raw, "x", item_ctx + ".click_client"),
+                    _req_int(cl_raw, "y", item_ctx + ".click_client"),
+                )
+            elif (
+                isinstance(cl_raw, list)
+                and len(cl_raw) == 2
+                and all(isinstance(v, int) for v in cl_raw)
+            ):
+                click_client = (int(cl_raw[0]), int(cl_raw[1]))
+            else:
+                raise ConfigError(
+                    f"{item_ctx}.click_client: expected {{x,y}} or [x,y] int pair",
+                )
+        dcl_raw = entry.get("drag_to_client")
+        drag_to_client: tuple[int, int] | None = None
+        if dcl_raw is not None:
+            if isinstance(dcl_raw, dict):
+                drag_to_client = (
+                    _req_int(dcl_raw, "x", item_ctx + ".drag_to_client"),
+                    _req_int(dcl_raw, "y", item_ctx + ".drag_to_client"),
+                )
+            elif (
+                isinstance(dcl_raw, list)
+                and len(dcl_raw) == 2
+                and all(isinstance(v, int) for v in dcl_raw)
+            ):
+                drag_to_client = (int(dcl_raw[0]), int(dcl_raw[1]))
+            else:
+                raise ConfigError(
+                    f"{item_ctx}.drag_to_client: expected {{x,y}} or [x,y] int pair",
+                )
+        if click_cell is not None and (
+            click_client is not None or drag_to_client is not None
+        ):
+            raise ConfigError(
+                f"{item_ctx}: use either click_cell (map) or click_client "
+                "(HUD pixels), not both",
+            )
+        if drag_to_client is not None and click_client is None:
+            raise ConfigError(
+                f"{item_ctx}.drag_to_client requires click_client (drag start)",
+            )
+        mods_raw = entry.get("hold_modifiers")
+        if mods_raw is None:
+            hold_modifiers: tuple[str, ...] = ()
+        elif isinstance(mods_raw, list):
+            hold_modifiers = tuple(
+                str(m).strip()
+                for m in mods_raw
+                if isinstance(m, str) and m.strip()
+            )
+        else:
+            raise ConfigError(f"{item_ctx}.hold_modifiers: expected string array")
+        mhc_raw = entry.get("modifier_hold_clicks")
+        if mhc_raw is None:
+            mhc_raw = entry.get("modifier_hold_left_clicks")
+        if mhc_raw is None:
+            modifier_hold_clicks = 0
+        elif isinstance(mhc_raw, int) and not isinstance(mhc_raw, bool):
+            modifier_hold_clicks = mhc_raw
+        else:
+            raise ConfigError(
+                f"{item_ctx}.modifier_hold_clicks: expected integer",
+            )
+        if modifier_hold_clicks < 0:
+            raise ConfigError(
+                f"{item_ctx}.modifier_hold_clicks: must be >= 0",
+            )
+        if "modifier_hold_click_interval_sec" in entry:
+            modifier_hold_click_interval_sec = _opt_num(
+                entry,
+                "modifier_hold_click_interval_sec",
+                item_ctx,
+                default=0.25,
+            )
+        elif "modifier_hold_left_click_interval_sec" in entry:
+            modifier_hold_click_interval_sec = _opt_num(
+                entry,
+                "modifier_hold_left_click_interval_sec",
+                item_ctx,
+                default=0.25,
+            )
+        else:
+            modifier_hold_click_interval_sec = 0.25
+        modifier_hold_mouse_button = _opt_str(
+            entry,
+            "modifier_hold_mouse_button",
+            item_ctx,
+            default="left",
+        ).lower()
+        if modifier_hold_mouse_button not in ("left", "right"):
+            raise ConfigError(
+                f"{item_ctx}.modifier_hold_mouse_button: "
+                "expected \"left\" or \"right\"",
+            )
+        if modifier_hold_clicks > 0:
+            if not hold_modifiers:
+                raise ConfigError(
+                    f"{item_ctx}: modifier_hold_clicks requires "
+                    "non-empty hold_modifiers",
+                )
+            if key:
+                raise ConfigError(
+                    f"{item_ctx}: modifier_hold_clicks cannot be combined "
+                    "with key (use a separate step for Alt+key chords)",
+                )
+        if modifier_hold_clicks > 0 and (
+            click_cell_drag_to is not None or click_cell_drag_repeat_count > 0
+        ):
+            raise ConfigError(
+                f"{item_ctx}: cannot combine modifier_hold_clicks with "
+                "click_cell_drag_to / click_cell_drag_repeat_count",
+            )
+        dcp_raw = entry.get("dismiss_chat_probe_client")
+        dismiss_chat_probe_client: tuple[int, int] | None = None
+        if dcp_raw is not None:
+            dcp_ctx = f"{item_ctx}.dismiss_chat_probe_client"
+            if isinstance(dcp_raw, dict):
+                dismiss_chat_probe_client = (
+                    _req_int(dcp_raw, "x", dcp_ctx),
+                    _req_int(dcp_raw, "y", dcp_ctx),
+                )
+            elif (
+                isinstance(dcp_raw, list)
+                and len(dcp_raw) == 2
+                and all(isinstance(v, int) for v in dcp_raw)
+            ):
+                dismiss_chat_probe_client = (int(dcp_raw[0]), int(dcp_raw[1]))
+            else:
+                raise ConfigError(
+                    f"{item_ctx}.dismiss_chat_probe_client: "
+                    "expected {{x,y}} or [x,y] int pair",
+                )
+        dismiss_chat_min_channel = int(
+            round(
+                _opt_num(
+                    entry,
+                    "dismiss_chat_min_channel",
+                    item_ctx,
+                    default=228.0,
+                ),
+            ),
+        )
+        if not 0 <= dismiss_chat_min_channel <= 255:
+            raise ConfigError(
+                f"{item_ctx}.dismiss_chat_min_channel: must be 0..255",
+            )
+        dismiss_chat_key = _opt_str(
+            entry, "dismiss_chat_key", item_ctx, default="escape",
+        )
+        out.append(
+            HomePrepStep(
+                key=key,
+                delay_after_sec=delay_after_sec,
+                click_cell=click_cell,
+                click_client=click_client,
+                drag_to_client=drag_to_client,
+                hold_modifiers=hold_modifiers,
+                modifier_hold_clicks=modifier_hold_clicks,
+                modifier_hold_click_interval_sec=modifier_hold_click_interval_sec,
+                modifier_hold_mouse_button=modifier_hold_mouse_button,
+                click_cell_drag_to=click_cell_drag_to,
+                click_cell_drag_repeat_count=click_cell_drag_repeat_count,
+                click_cell_drag_repeat_interval_sec=(
+                    click_cell_drag_repeat_interval_sec
+                ),
+                dismiss_chat_probe_client=dismiss_chat_probe_client,
+                dismiss_chat_min_channel=dismiss_chat_min_channel,
+                dismiss_chat_key=dismiss_chat_key,
+            ),
+        )
+    return tuple(out)
 
 
 def _parse_farm_transitions(
@@ -716,6 +1040,15 @@ def _opt_int(data: dict, key: str, ctx: str, *, default: int) -> int:
             f"{ctx}.{key}: expected int, got {type(value).__name__}"
         )
     return value
+
+
+def _opt_str(data: dict, key: str, ctx: str, *, default: str) -> str:
+    if key not in data:
+        return default
+    v = data[key]
+    if not isinstance(v, str):
+        raise ConfigError(f"{ctx}.{key}: expected string")
+    return v
 
 
 def _parse_str_list(data: list, ctx: str) -> list[str]:

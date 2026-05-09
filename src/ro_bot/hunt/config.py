@@ -121,6 +121,65 @@ class FarmHomeRouteConfig:
 
 
 @dataclass(frozen=True)
+class HomePrepStep:
+    """One HID action (optional) plus a pause before the next step.
+
+    ``modifier_hold_clicks``: with non-empty ``hold_modifiers``, press those
+    keys down, emit ``modifier_hold_clicks`` mouse clicks (see
+    ``modifier_hold_mouse_button``) at the current cursor (after any
+    ``click_cell`` / client click in the same step),
+    ``modifier_hold_click_interval_sec`` apart, then release modifiers.
+    Requires empty ``key`` (mutually exclusive with a key chord).
+
+    ``click_cell_drag_to`` with ``click_cell_drag_repeat_count`` > 0: repeat
+    an LMB drag from ``click_cell`` to ``click_cell_drag_to`` in world cells.
+    If ``key`` is set, it is pressed after **each** drag (before the inter-drag
+    ``click_cell_drag_repeat_interval_sec`` pause).
+
+    ``dismiss_chat_probe_client``: optional client pixel sampled at the **start**
+    of the step (before clicks / keys). If ``max(R,G,B) >= dismiss_chat_min_channel``,
+    the **white chat input** is assumed visible and ``dismiss_chat_key`` is pressed
+    once (default ``escape``). Typical pattern: only on a lone ``key="space"``
+    step that must not type into chat — set the probe inside the white bar when
+    chat is open. Requires game ``hwnd`` in :class:`~ro_bot.hunt.policies.home_prep.HomePrepPolicy`.
+    """
+    key: str = ""
+    delay_after_sec: float = 2.0
+    #: World-map cell (projection); floats allowed (e.g. ``192.5`` for X).
+    #: Mutually exclusive with ``click_client``.
+    click_cell: tuple[float, float] | None = None
+    #: Game client pixel (0,0 = top-left of client). For inventory UI, etc.
+    click_client: tuple[int, int] | None = None
+    #: With ``click_client``: LMB drag start → end in client pixels.
+    drag_to_client: tuple[int, int] | None = None
+    hold_modifiers: tuple[str, ...] = ()
+    #: Mouse clicks while ``hold_modifiers`` are held (0 = off).
+    modifier_hold_clicks: int = 0
+    modifier_hold_click_interval_sec: float = 0.25
+    #: ``"left"`` or ``"right"`` (firmware must implement ``RD``/``RU``).
+    modifier_hold_mouse_button: str = "left"
+    #: World-map LMB drag end (requires ``click_cell`` and repeat count > 0).
+    click_cell_drag_to: tuple[float, float] | None = None
+    click_cell_drag_repeat_count: int = 0
+    click_cell_drag_repeat_interval_sec: float = 0.25
+    #: Client pixel for chat-bar brightness probe (see class docstring).
+    dismiss_chat_probe_client: tuple[int, int] | None = None
+    dismiss_chat_min_channel: int = 228
+    dismiss_chat_key: str = "escape"
+
+
+@dataclass(frozen=True)
+class HomePrepConfig:
+    """Town-side restock / storage sequence before :class:`FarmHomeRoutePolicy`."""
+    enabled: bool = True
+    steps: tuple[HomePrepStep, ...] = ()
+    post_steps: tuple[HomePrepStep, ...] = ()
+    #: When > 0, wait until ``weight / weight_max`` drops below this ratio.
+    finish_when_weight_ratio_below: float = 0.0
+    max_total_sec: float = 180.0
+
+
+@dataclass(frozen=True)
 class FarmTransition:
     """One neighbor-map escape → farm-map recovery rule.
 
@@ -172,6 +231,10 @@ class ReturnToFarmConfig:
     session build (no town→farm clicks); use while recording a path manually.
     JSON ``home_route`` is ignored while disabled. Neighbor walk-back still
     follows ``maps`` unless you clear those transitions.
+
+    ``home_prep`` (optional) runs :class:`~ro_bot.hunt.policies.home_prep.HomePrepPolicy`
+    on ``home_route.home_map`` before waypoint navigation; requires
+    ``home_route`` and non-empty ``steps`` when enabled.
     """
     walk_cells: int = 10
     settle_sec: float = 1.5
@@ -186,6 +249,7 @@ class ReturnToFarmConfig:
     home_route: FarmHomeRouteConfig | None = None
     #: Town→farm waypoint navigation (registry or JSON ``home_route``).
     home_navigation_enabled: bool = True
+    home_prep: HomePrepConfig | None = None
 
 
 @dataclass(frozen=True)

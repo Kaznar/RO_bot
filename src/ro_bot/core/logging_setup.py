@@ -18,6 +18,9 @@ HUNT_FORMAT = "%(asctime)s %(levelname)-5s %(message)s"
 # attack/engagement events don't get buried under scapy/verbose debug.
 HUNT_LOGGER_NAME = "ro_bot.hunt"
 
+# Global hooks (``pynput``) for manual input capture — ``input-capture`` CLI.
+INPUT_CAPTURE_LOGGER_NAME = "ro_bot.input_capture"
+
 
 def setup_root_logging(log_path: str = "bot.log") -> None:
     """Install root file + stdout handlers once. Idempotent."""
@@ -65,3 +68,28 @@ def setup_hunt_logging(log_path: str = "hunt.log") -> logging.Logger:
 
     setup_hunt_logging._done = True  # type: ignore[attr-defined]
     return hunt
+
+
+def setup_input_capture_logging(
+    log_path: str = "input_capture.log",
+) -> logging.Logger:
+    """File + stdout for :mod:`ro_bot.app.input_log_runner` (non-propagating)."""
+    cap = logging.getLogger(INPUT_CAPTURE_LOGGER_NAME)
+    if getattr(setup_input_capture_logging, "_done", False):
+        return cap
+    cap.setLevel(logging.DEBUG)
+    cap.propagate = False
+    fmt = logging.Formatter(ROOT_FORMAT)
+
+    fh = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt)
+    cap.addHandler(fh)
+
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(fmt)
+    cap.addHandler(ch)
+
+    setup_input_capture_logging._done = True  # type: ignore[attr-defined]
+    return cap
