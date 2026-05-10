@@ -19,6 +19,10 @@ Responsibilities (ordered per tick):
   Warp return: hunt map → manual-control map → back to that hunt map
   queues one idle teleport before step 9 (needs ``idle_action``).
 
+  Death return (optional): when memory HP crosses into ``(0, hp_at_most]`` on
+  a hunt map, one ground walk click ``delta_*_cells`` from the player (town
+  warp); arrival on ``manual_control_maps`` matches manual ``h`` hand-off.
+
   Active farm: when ``return_to_farm.active_farm_map`` is set, a 0091
   edge from a configured **neighbor** of that farm onto the farm map
   also queues one idle teleport first (return-to-farm walk-off warp).
@@ -53,6 +57,7 @@ from ro_bot.hunt.dead_zones.filter import DeadZoneFilter
 from ro_bot.hunt.event_bus import EventBus
 from ro_bot.hunt.pause import PauseToken
 from ro_bot.hunt.policies.buffs import BuffPolicy
+from ro_bot.hunt.policies.death_return import DeathReturnPolicy
 from ro_bot.hunt.policies.engagement import EngagementMachine, TargetState
 from ro_bot.hunt.policies.escape import EscapePolicy
 from ro_bot.hunt.policies.heal import HealPolicy
@@ -115,6 +120,16 @@ class HuntController:
                 all_maps=cfg.ignore_map_restrictions,
             )
             if cfg.heal is not None else None
+        )
+        self._death_return = (
+            DeathReturnPolicy(
+                cfg.death_return,
+                aim,
+                cfg.manual_control_maps,
+                all_maps=cfg.ignore_map_restrictions,
+            )
+            if cfg.death_return is not None
+            else None
         )
         self._buffs = BuffPolicy(
             cfg.buffs,
@@ -341,8 +356,14 @@ class HuntController:
             return
 
         current_map = self._sniffer.get_map_name() or "?"
+        st_mem = self._read_player_state()
+        survival = self._suppress_automation_for_death_return_survival(st_mem)
+
         if self._pending_warp_return_idle_tp:
-            if self._is_manual_control_map(current_map):
+            if survival:
+                self._pending_warp_return_idle_tp = False
+                self._pending_warp_return_idle_reason = None
+            elif self._is_manual_control_map(current_map):
                 self._pending_warp_return_idle_tp = False
                 self._pending_warp_return_idle_reason = None
             elif self._idle is not None:
@@ -371,19 +392,36 @@ class HuntController:
             return
         self._leave_manual_control_mode(current_map)
 
+        st_dr = st_mem
+        if self._death_return is not None:
+            if self._death_return.tick(current_map, st_dr):
+                if self._engagement.state.gid is not None:
+                    self._engagement.state.clear()
+                if self._idle is not None:
+                    self._idle.on_map_reset()
+                return
+
         self._maybe_log_weight_snapshot(now)
 
-        if self._heal is not None:
+        if not survival and self._heal is not None:
             self._heal.tick(now)
-        self._buffs.tick(now)
+        if not survival:
+            self._buffs.tick(now)
 
         self._blacklist.expire(now)
 
         visible = self._tracker.get_all_positions()
         self._cells.update(visible, now)
 
-        if self._escape is not None and self._escape.press_if_ready(now):
+        if (
+            not survival
+            and self._escape is not None
+            and self._escape.press_if_ready(now)
+        ):
             self._handle_escape_tick()
+            return
+
+        if survival:
             return
 
         prep_suppress = False
@@ -452,6 +490,7 @@ class HuntController:
     ) -> None:
         for old_map, new_map in pairs:
             self._apply_warp_return_transition(old_map, new_map)
+        self._maybe_arm_town_return_flow(pairs)
 
         map_name = self._sniffer.get_map_name() or "?"
 
@@ -468,6 +507,8 @@ class HuntController:
         self._dead_zone_blocked_since = None
         if self._idle is not None:
             self._idle.on_map_reset()
+        if self._death_return is not None:
+            self._death_return.on_map_reset()
         if self._farm_home_route is not None:
             self._farm_home_route.on_map_change(map_name, time.monotonic())
         if self._return_to_farm is not None:
@@ -480,6 +521,35 @@ class HuntController:
                 self._return_to_farm.on_map_change(map_name, time.monotonic())
         if self._overweight is not None:
             self._overweight.on_map_reset()
+
+    def arm_farm_home_route_after_manual_town_prep(self) -> None:
+        """Standalone ``home-prep``: same arming as a 0091 town entry (no sniffer pair)."""
+        if self._farm_home_route is not None:
+            self._farm_home_route.arm_from_town_arrival()
+
+    def _maybe_arm_town_return_flow(
+        self,
+        pairs: tuple[tuple[str | None, str], ...],
+    ) -> None:
+        """Arm town restock and farm-home navigation after ``home_map`` entry."""
+        rtf = self._cfg.return_to_farm
+        if rtf is None or rtf.home_route is None:
+            return
+        hm = (rtf.home_route.home_map or "").strip()
+        if not hm:
+            return
+        for old_map, new_map in pairs:
+            if (
+                new_map == hm
+                and old_map is not None
+                and old_map not in ("?", "")
+                and old_map != new_map
+                and old_map != hm
+            ):
+                if self._home_prep is not None:
+                    self._home_prep.arm_restock()
+                if self._farm_home_route is not None:
+                    self._farm_home_route.arm_from_town_arrival()
 
     def _apply_warp_return_transition(
         self,
@@ -702,6 +772,30 @@ class HuntController:
             "Weight snapshot: %d/%d (%.1f%%)",
             st.weight, st.weight_max, pct,
         )
+
+    def _suppress_automation_for_death_return_survival(
+        self,
+        st: PlayerState | None,
+    ) -> bool:
+        """True while sniffer or memory HP is in the death-return band.
+
+        :class:`~ro_bot.hunt.policies.heal.HealPolicy` uses sniffer HP; walk
+        clicks use memory. Either can stay at 1 while the other glitches, so
+        we suppress heal / save-teleport / idle TP if **either** source is
+        critical (``0 < hp <= death_return.hp_at_most`` for sniffer; memory
+        includes ``hp == 0`` as dead/stale).
+        """
+        dr = self._cfg.death_return
+        if dr is None:
+            return False
+        hp_sn, _ = self._sniffer.get_player_hp()
+        sniff_crit = 0 < hp_sn <= dr.hp_at_most
+        mem_crit = (
+            st is not None
+            and st.hp_max > 0
+            and st.hp <= dr.hp_at_most
+        )
+        return sniff_crit or mem_crit
 
     def _read_player_state(self) -> PlayerState | None:
         s = self._player_reader.read()

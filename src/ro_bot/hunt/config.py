@@ -61,6 +61,24 @@ class IdleActionConfig:
 
 
 @dataclass(frozen=True)
+class DeathReturnConfig:
+    """Near-death walk click (e.g. 1 HP) toward a scripted town warp cell.
+
+    Optional ``second_delta_*`` (both set) issues a second ground click at
+    first_target + (second_delta_x_cells, second_delta_y_cells).
+
+    See :mod:`ro_bot.hunt.policies.death_return`.
+    """
+    hp_at_most: int = 1
+    delta_x_cells: float = 0.0
+    delta_y_cells: float = -4.7
+    aim_settle_sec: float = 0.0
+    second_delta_x_cells: float | None = None
+    second_delta_y_cells: float | None = None
+    second_click_delay_sec: float = 0.12
+
+
+@dataclass(frozen=True)
 class OverweightConfig:
     """When carried weight is too high, press ``key`` and pause hunt/idle TP.
 
@@ -106,6 +124,11 @@ class FarmHomeRouteConfig:
     ``stuck_no_move_timeout_sec``, jiggle the HID cursor then issue a recovery
     click one grid step toward the waypoint. Earlier repeats use the same
     mouse jitter when idle exceeds ~45% of that timeout (client false rejects).
+
+    ``finish_on_active_farm_map`` — when True, as soon as the remaining
+    waypoints are all on ``active_farm_map`` and the sniffer reports that map,
+    the route completes without walking to the last anchor cell (spawn
+    positions on the farm often differ from a tuned ``(x,y)`` waypoint).
     """
     home_map: str
     waypoints: tuple[FarmRouteWaypoint, ...]
@@ -118,6 +141,7 @@ class FarmHomeRouteConfig:
     #: After each 0091 map change (and when the route first arms), skip ground
     #: clicks until this many seconds pass so the client can finish loading.
     post_map_change_grace_sec: float = 3.0
+    finish_on_active_farm_map: bool = True
 
 
 @dataclass(frozen=True)
@@ -319,6 +343,7 @@ class HuntConfig:
     dead_zones: tuple[DeadZone, ...] = ()
     engagement: EngagementConfig = field(default_factory=EngagementConfig)
     heal: HealConfig | None = None
+    death_return: DeathReturnConfig | None = None
     idle_action: IdleActionConfig | None = None
     overweight: OverweightConfig | None = None
     escape: EscapeConfig | None = None

@@ -28,6 +28,7 @@ class ComodoPaths:
             FarmRouteWaypoint("comodo", 314, 181),
             FarmRouteWaypoint("comodo", 323, 176),
             FarmRouteWaypoint("comodo", 333, 175),
+            FarmRouteWaypoint("comodo", 343, 175),
         )
 
    

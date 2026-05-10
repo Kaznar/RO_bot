@@ -22,7 +22,14 @@
         "inset_x": 130,
         "inset_y": 0,
         "width": 150,
-        "height": 60
+        "height": 70
+      },
+      {
+        "anchor": "TR",
+        "inset_x": 0,
+        "inset_y": 0,
+        "width": 130,
+        "height": 70
       },
       {
         "anchor": "TR",
@@ -102,7 +109,7 @@
     ],
     "engagement": {
       "kill_timeout_sec": 12.0,
-      "blacklist_sec": 5.0,
+      "blacklist_sec": 10.0,
       "reaim_click_cooldown_sec": 0.3,
       "aim_settle_sec": 0.1,
       "target_settle_sec": 2.0,
@@ -121,6 +128,12 @@
       "key": "q",
       "cooldown_sec": 0.2,
       "min_hp": 2000
+    },
+    "death_return": {
+      "hp_at_most": 1,
+      "delta_y_cells": -3.7,
+      "second_delta_x_cells": 1.7,
+      "second_delta_y_cells": 2.5
     },
     "idle_action": {
       "key": "t",

@@ -65,6 +65,7 @@ def run_home_prep_dev_loop(
     policy_factory: Callable[[], HomePrepPolicy | None],
     should_stop: Callable[[], bool],
     settle_after_home_sec: float = DEFAULT_HOME_PREP_DEV_SETTLE_SEC,
+    after_prep_arm: Callable[[], None] | None = None,
 ) -> int:
     """DEV: after manual ``h`` onto ``home_map``, wait then run prep once per visit.
 
@@ -122,6 +123,9 @@ def run_home_prep_dev_loop(
                         "return_to_farm.active_farm_map (registry) or JSON home_prep",
                     )
                     return 1
+                policy.arm_restock()
+                if after_prep_arm is not None:
+                    after_prep_arm()
             policy.tick(now, m)
             if policy.run_finished:
                 logger.info(

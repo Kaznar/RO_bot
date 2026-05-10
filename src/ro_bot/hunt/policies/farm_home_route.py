@@ -1,9 +1,13 @@
 """Home → active farm map navigation via ordered map-cell waypoints.
 
 Uses :class:`FarmHomeRouteConfig` nested under :class:`ReturnToFarmConfig`.
-When the sniffer reports ``home_map`` and ``active_farm_map`` differs,
-the controller arms this policy and issues periodic aim-and-click steps
-toward each waypoint until the final cell on the farm map is reached.
+The controller calls :meth:`arm_from_town_arrival` on the same 0091 edge as
+``home_prep`` (enter ``home_map`` from another map — butterfly wing / warp),
+then this policy arms and issues aim-and-click steps along the waypoints.
+
+When ``finish_on_active_farm_map`` is True (default), arriving on the farm
+map with only farm-map waypoints left completes the route without walking to
+the last anchor cell.
 
 Portable across PCs: targets are RO cell coordinates, not screen pixels.
 
@@ -61,6 +65,23 @@ class FarmHomeRoutePolicy:
         self._aim = aim
         self._player_reader = player_reader
         self._state: _RouteState | None = None
+        #: Set by the controller on the same 0091 edge as ``home_prep`` restock
+        #: (enter ``home_map`` from a non-home map). Until then, do not arm the
+        #: click path on a standing town login.
+        self._navigation_armed: bool = False
+
+    def arm_from_town_arrival(self) -> None:
+        """Allow the town→farm waypoint sequence to start (after ``h`` / warp)."""
+        if not self.enabled():
+            return
+        if self._navigation_armed:
+            return
+        self._navigation_armed = True
+        logger.info("Farm home route: navigation armed (entered home_map)")
+
+    def _disarm(self) -> None:
+        self._state = None
+        self._navigation_armed = False
 
     def enabled(self) -> bool:
         farm = (self._rtf.active_farm_map or "").strip()
@@ -83,7 +104,7 @@ class FarmHomeRoutePolicy:
             return False
         if self.is_active():
             return True
-        return map_name == self._hr.home_map
+        return map_name == self._hr.home_map and self._navigation_armed
 
     def on_map_change(self, map_name: str, now: float) -> None:
         """Resync waypoint index after a warp (0091)."""
@@ -108,20 +129,25 @@ class FarmHomeRoutePolicy:
     ) -> None:
         """Advance navigation. Safe every controller tick."""
         if not self.enabled():
-            self._state = None
+            self._disarm()
             return
 
         farm = self._rtf.active_farm_map
         assert farm is not None
+        farm_st = farm.strip()
 
         if self._state is None:
-            if current_map == self._hr.home_map and current_map != farm:
+            if (
+                self._navigation_armed
+                and current_map == self._hr.home_map
+                and current_map != farm_st
+            ):
                 grace = max(0.0, self._hr.post_map_change_grace_sec)
                 sup = now + grace if grace > 0 else None
                 self._state = _RouteState(index=0, suppress_clicks_until=sup)
                 logger.info(
                     "Farm home route: armed (%d waypoints → '%s')",
-                    len(self._hr.waypoints), farm,
+                    len(self._hr.waypoints), farm_st,
                 )
             return
 
@@ -132,13 +158,16 @@ class FarmHomeRoutePolicy:
         wps = self._hr.waypoints
         idx = self._state.index
         if idx >= len(wps):
-            self._state = None
+            self._disarm()
             return
 
         self._sync_index(current_map)
         idx = self._state.index
         if idx >= len(wps):
-            self._state = None
+            self._disarm()
+            return
+
+        if self._finish_on_farm_if_configured(current_map, farm_st, idx, wps):
             return
 
         wp = wps[idx]
@@ -169,7 +198,7 @@ class FarmHomeRoutePolicy:
             )
             if st.index >= len(wps):
                 logger.info("Farm home route: completed")
-                self._state = None
+                self._disarm()
             return
 
         grace = max(0.0, self._hr.post_map_change_grace_sec)
@@ -199,7 +228,7 @@ class FarmHomeRoutePolicy:
                     "giving up waypoint %d/%d '%s' → disarming",
                     idx + 1, len(wps), wp.map_name,
                 )
-                self._state = None
+                self._disarm()
                 return
             st.stuck_attempts += 1
             step_cell = self._recovery_step_cell(pc, (wp.x, wp.y), st.stuck_attempts)
@@ -312,4 +341,26 @@ class FarmHomeRoutePolicy:
             "Farm home route: map '%s' not in route — disarming",
             map_name,
         )
-        self._state = None
+        self._disarm()
+
+    def _finish_on_farm_if_configured(
+        self,
+        current_map: str,
+        farm_st: str,
+        idx: int,
+        wps: tuple,
+    ) -> bool:
+        """Complete without walking to the last cell when configured."""
+        if not self._hr.finish_on_active_farm_map:
+            return False
+        if current_map != farm_st:
+            return False
+        for j in range(idx, len(wps)):
+            if wps[j].map_name != farm_st:
+                return False
+        logger.info(
+            "Farm home route: completed (finish_on_active_farm_map; on %s)",
+            farm_st,
+        )
+        self._disarm()
+        return True

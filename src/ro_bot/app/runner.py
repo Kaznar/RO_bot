@@ -108,6 +108,8 @@ def run_home_prep(
         session.stop()
         return 1
 
+    policy.arm_restock()
+    session.controller.arm_farm_home_route_after_manual_town_prep()
     hotkeys = HotkeyWatcher()
     try:
         return run_home_prep_loop(
@@ -165,6 +167,9 @@ def run_home_prep_dev(
             policy_factory=lambda: session.make_home_prep_policy(force_enabled=True),
             should_stop=lambda: hotkeys.pressed(VirtualKey.KEY_0),
             settle_after_home_sec=settle_after_home_sec,
+            after_prep_arm=(
+                lambda: session.controller.arm_farm_home_route_after_manual_town_prep()
+            ),
         )
     finally:
         session.stop()

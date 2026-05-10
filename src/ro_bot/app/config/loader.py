@@ -212,6 +212,9 @@ def _parse_profile(
             _req(data, "buffs", ctx, list), f"{ctx}.buffs",
         ),
         heal=_parse_heal(data.get("heal"), f"{ctx}.heal"),
+        death_return=_parse_death_return(
+            data.get("death_return"), f"{ctx}.death_return",
+        ),
         idle_action=_parse_idle(data.get("idle_action"), f"{ctx}.idle_action"),
         overweight=_parse_overweight(
             data.get("overweight"), f"{ctx}.overweight",
@@ -303,6 +306,58 @@ def _parse_heal(data: Any, ctx: str) -> HealConfig | None:
         key=_req(data, "key", ctx, str),
         min_hp=_req_int(data, "min_hp", ctx),
         cooldown_sec=_opt_num(data, "cooldown_sec", ctx, default=1.0),
+    )
+
+
+def _parse_death_return(data: Any, ctx: str) -> "DeathReturnConfig | None":
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    if data.get("enabled") is False:
+        return None
+    from ro_bot.hunt.config import DeathReturnConfig
+
+    d = DeathReturnConfig()
+    sx_raw = data.get("second_delta_x_cells")
+    sy_raw = data.get("second_delta_y_cells")
+    if sx_raw is not None or sy_raw is not None:
+        if sx_raw is None or sy_raw is None:
+            raise ConfigError(
+                f"{ctx}: set both second_delta_x_cells and second_delta_y_cells "
+                "for a two-click death return, or omit both",
+            )
+        for label, raw in (
+            ("second_delta_x_cells", sx_raw),
+            ("second_delta_y_cells", sy_raw),
+        ):
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise ConfigError(
+                    f"{ctx}.{label}: expected number, got {type(raw).__name__}",
+                )
+        second_dx = float(sx_raw)
+        second_dy = float(sy_raw)
+    else:
+        second_dx = None
+        second_dy = None
+
+    return DeathReturnConfig(
+        hp_at_most=_opt_int(data, "hp_at_most", ctx, default=d.hp_at_most),
+        delta_x_cells=_opt_num(
+            data, "delta_x_cells", ctx, default=d.delta_x_cells,
+        ),
+        delta_y_cells=_opt_num(
+            data, "delta_y_cells", ctx, default=d.delta_y_cells,
+        ),
+        aim_settle_sec=_opt_num(
+            data, "aim_settle_sec", ctx, default=d.aim_settle_sec,
+        ),
+        second_delta_x_cells=second_dx,
+        second_delta_y_cells=second_dy,
+        second_click_delay_sec=_opt_num(
+            data, "second_click_delay_sec", ctx,
+            default=d.second_click_delay_sec,
+        ),
     )
 
 
@@ -538,7 +593,21 @@ def _parse_farm_home_route(
             data, "post_map_change_grace_sec", ctx,
             default=3.0,
         ),
+        finish_on_active_farm_map=_parse_farm_home_route_finish_on_farm(
+            data, ctx,
+        ),
     )
+
+
+def _parse_farm_home_route_finish_on_farm(data: dict, ctx: str) -> bool:
+    if "finish_on_active_farm_map" not in data:
+        return True
+    raw = data["finish_on_active_farm_map"]
+    if not isinstance(raw, bool):
+        raise ConfigError(
+            f"{ctx}.finish_on_active_farm_map: expected boolean",
+        )
+    return raw
 
 
 def _parse_home_prep(data: Any, ctx: str) -> HomePrepConfig | None:

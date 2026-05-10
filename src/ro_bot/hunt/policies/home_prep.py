@@ -58,6 +58,18 @@ class HomePrepPolicy:
         self._apply_failures = 0
         self._rmb_unavailable_logged = False
         self._dismiss_chat_probe_no_hwnd_logged = False
+        #: When False, standing on ``home_map`` at hunt start does not run prep;
+        #: set True by :meth:`arm_restock` or by the controller on town arrival
+        #: (farm/other map → ``home_map``), e.g. after butterfly wing ``h`` or
+        #: a ``death_return`` warp.
+        self._restock_armed: bool = False
+
+    def arm_restock(self) -> None:
+        """Allow the prep sequence to run on the next ticks while on ``home_map``."""
+        if self._restock_armed:
+            return
+        self._restock_armed = True
+        logger.info("Home prep: restock armed")
 
     @property
     def run_started(self) -> bool:
@@ -353,6 +365,9 @@ class HomePrepPolicy:
         if self._completed:
             return
 
+        if not self._restock_armed:
+            return
+
         if self._run_started_at is None:
             self._run_started_at = now
             self._wait_until = now
@@ -457,3 +472,4 @@ class HomePrepPolicy:
         self._apply_failures = 0
         self._rmb_unavailable_logged = False
         self._dismiss_chat_probe_no_hwnd_logged = False
+        self._restock_armed = False

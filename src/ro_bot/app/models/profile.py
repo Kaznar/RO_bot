@@ -14,6 +14,7 @@ from ro_bot.app.models.server import Server
 from ro_bot.hunt.config import (
     AimOffsetSpec,
     BuffSpec,
+    DeathReturnConfig,
     EngagementConfig,
     EscapeConfig,
     HealConfig,
@@ -34,6 +35,7 @@ class Profile:
     aim_offsets: tuple[AimOffsetSpec, ...] = ()
     buffs: tuple[BuffSpec, ...] = ()
     heal: HealConfig | None = None
+    death_return: DeathReturnConfig | None = None
     idle_action: IdleActionConfig | None = None
     overweight: OverweightConfig | None = None
     escape: EscapeConfig | None = None

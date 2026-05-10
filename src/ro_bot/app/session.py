@@ -279,6 +279,7 @@ class BotSession:
             aim_offsets=p.aim_offsets,
             engagement=p.engagement,
             heal=p.heal,
+            death_return=p.death_return,
             idle_action=p.idle_action,
             overweight=p.overweight,
             escape=p.escape,
