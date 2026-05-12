@@ -43,7 +43,7 @@ def wait_prep_until_in_world(
     slog = status_log or PREP_LOG
     slog.info(
         "PREP_WAIT deadline_sec=%.0f — přihlas postavu „%s“, vejdi do světa; "
-        "nahrávání začne až bude mapa + postava připravené. Numpad 0 zruší.",
+        "nahrávání začne až bude mapa + postava připravené. F9 zruší.",
         deadline_sec,
         char_name,
     )

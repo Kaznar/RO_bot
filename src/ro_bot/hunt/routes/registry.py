@@ -10,12 +10,14 @@ from collections.abc import Callable
 
 from ro_bot.hunt.config import ReturnToFarmConfig
 from ro_bot.hunt.routes.plan import FarmReturnPlan
+from ro_bot.hunt.routes.strategies.cmd_fild01 import plan_return_comodo_to_cmd_fild01
 from ro_bot.hunt.routes.strategies.um_fild03 import plan_return_comodo_to_um_fild03
 
 FarmReturnPlanFactory = Callable[[], FarmReturnPlan]
 
 #: Registry keyed by ``ReturnToFarmConfig.active_farm_map`` string.
 FARM_RETURN_PLAN_FACTORIES: dict[str, FarmReturnPlanFactory] = {
+    "cmd_fild01": plan_return_comodo_to_cmd_fild01,
     "um_fild03": plan_return_comodo_to_um_fild03,
 }
 

@@ -306,6 +306,12 @@ def _parse_heal(data: Any, ctx: str) -> HealConfig | None:
         key=_req(data, "key", ctx, str),
         min_hp=_req_int(data, "min_hp", ctx),
         cooldown_sec=_opt_num(data, "cooldown_sec", ctx, default=1.0),
+        save_recovery_check_sec=_opt_num(
+            data, "save_recovery_check_sec", ctx, default=5.0,
+        ),
+        save_recovery_key=_opt_str(
+            data, "save_recovery_key", ctx, default="h",
+        ),
     )
 
 
@@ -358,6 +364,12 @@ def _parse_death_return(data: Any, ctx: str) -> "DeathReturnConfig | None":
             data, "second_click_delay_sec", ctx,
             default=d.second_click_delay_sec,
         ),
+        town_return_retry_sec=_opt_num(
+            data, "town_return_retry_sec", ctx, default=d.town_return_retry_sec,
+        ),
+        town_return_escape_key=_opt_str(
+            data, "town_return_escape_key", ctx, default=d.town_return_escape_key,
+        ),
     )
 
 
@@ -387,10 +399,22 @@ def _parse_idle(data: Any, ctx: str) -> IdleActionConfig | None:
         return None
     if not isinstance(data, dict):
         raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    defaults = IdleActionConfig(key="t")
+    suppress_while_visible_name = defaults.suppress_while_visible_name
+    if "suppress_while_visible_name" in data:
+        raw = data["suppress_while_visible_name"]
+        if not isinstance(raw, bool):
+            raise ConfigError(
+                f"{ctx}.suppress_while_visible_name: expected boolean",
+            )
+        suppress_while_visible_name = raw
     return IdleActionConfig(
         key=_req(data, "key", ctx, str),
-        after_sec=_opt_num(data, "after_sec", ctx, default=10.0),
-        after_kill_sec=_opt_num(data, "after_kill_sec", ctx, default=2.0),
+        after_sec=_opt_num(data, "after_sec", ctx, default=defaults.after_sec),
+        after_kill_sec=_opt_num(
+            data, "after_kill_sec", ctx, default=defaults.after_kill_sec,
+        ),
+        suppress_while_visible_name=suppress_while_visible_name,
     )
 
 
@@ -796,6 +820,31 @@ def _parse_home_prep_steps(
             raise ConfigError(
                 f"{item_ctx}.drag_to_client requires click_client (drag start)",
             )
+        ccdrc_raw = entry.get("click_client_drag_repeat_count")
+        if ccdrc_raw is None:
+            click_client_drag_repeat_count = 0
+        elif isinstance(ccdrc_raw, int) and not isinstance(ccdrc_raw, bool):
+            click_client_drag_repeat_count = ccdrc_raw
+        else:
+            raise ConfigError(
+                f"{item_ctx}.click_client_drag_repeat_count: expected integer",
+            )
+        if click_client_drag_repeat_count < 0:
+            raise ConfigError(
+                f"{item_ctx}.click_client_drag_repeat_count: must be >= 0",
+            )
+        if click_client_drag_repeat_count > 0:
+            if click_client is None or drag_to_client is None:
+                raise ConfigError(
+                    f"{item_ctx}: click_client_drag_repeat_count>0 requires "
+                    "click_client and drag_to_client",
+                )
+        click_client_drag_repeat_interval_sec = _opt_num(
+            entry,
+            "click_client_drag_repeat_interval_sec",
+            item_ctx,
+            default=0.25,
+        )
         mods_raw = entry.get("hold_modifiers")
         if mods_raw is None:
             hold_modifiers: tuple[str, ...] = ()
@@ -861,11 +910,14 @@ def _parse_home_prep_steps(
                     "with key (use a separate step for Alt+key chords)",
                 )
         if modifier_hold_clicks > 0 and (
-            click_cell_drag_to is not None or click_cell_drag_repeat_count > 0
+            click_cell_drag_to is not None
+            or click_cell_drag_repeat_count > 0
+            or click_client_drag_repeat_count > 0
         ):
             raise ConfigError(
                 f"{item_ctx}: cannot combine modifier_hold_clicks with "
-                "click_cell_drag_to / click_cell_drag_repeat_count",
+                "click_cell_drag_to / click_cell_drag_repeat_count / "
+                "click_client_drag_repeat_count",
             )
         dcp_raw = entry.get("dismiss_chat_probe_client")
         dismiss_chat_probe_client: tuple[int, int] | None = None
@@ -919,6 +971,10 @@ def _parse_home_prep_steps(
                 click_cell_drag_repeat_count=click_cell_drag_repeat_count,
                 click_cell_drag_repeat_interval_sec=(
                     click_cell_drag_repeat_interval_sec
+                ),
+                click_client_drag_repeat_count=click_client_drag_repeat_count,
+                click_client_drag_repeat_interval_sec=(
+                    click_client_drag_repeat_interval_sec
                 ),
                 dismiss_chat_probe_client=dismiss_chat_probe_client,
                 dismiss_chat_min_channel=dismiss_chat_min_channel,
@@ -1053,6 +1109,18 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
         abandon_target_key=_parse_optional_abandon_target_key(
             data, ctx,
             default=defaults.abandon_target_key,
+        ),
+        stack_cell_melee_dist=_opt_int(
+            data, "stack_cell_melee_dist", ctx,
+            default=defaults.stack_cell_melee_dist,
+        ),
+        stack_cell_resume_sec=_opt_num(
+            data, "stack_cell_resume_sec", ctx,
+            default=defaults.stack_cell_resume_sec,
+        ),
+        stack_cell_warp_after_abandons=_opt_int(
+            data, "stack_cell_warp_after_abandons", ctx,
+            default=defaults.stack_cell_warp_after_abandons,
         ),
     )
 

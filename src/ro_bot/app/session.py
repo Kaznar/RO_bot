@@ -117,6 +117,8 @@ class BotSession:
         """Same prep policy wiring as :class:`HuntController` (standalone ``home-prep``)."""
         if self._bridge is None or self._rect is None or self._player_reader is None:
             raise RuntimeError("BotSession not started")
+        if self._hwnd is not None:
+            self._rect = get_client_rect(self._hwnd)
         cfg = self._build_hunt_config()
         aim = AimService(
             bridge=self._bridge,

@@ -84,6 +84,8 @@ DEFAULTS: dict[str, Any] = {
             "key": "q",
             "cooldown_sec": 1.0,
             "min_hp": 500,
+            "save_recovery_check_sec": 5.0,
+            "save_recovery_key": "h",
         },
         "idle_action": {
             "key": "t",

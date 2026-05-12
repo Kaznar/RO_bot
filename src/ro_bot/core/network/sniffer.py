@@ -190,6 +190,7 @@ class PacketSniffer:
 
         # Additional listeners for hunt policies (coexist with tracker).
         self._vanish_listeners: list[Callable[[int, int], None]] = []
+        self._stopmove_listeners: list[Callable[[int, int, int], None]] = []
         self._map_listeners: list[Callable[[str, int, int], None]] = []
 
     # ── Configuration ───────────────────────────────────────────────
@@ -227,6 +228,19 @@ class PacketSniffer:
     ) -> None:
         try:
             self._vanish_listeners.remove(cb)
+        except ValueError:
+            pass
+
+    def add_entity_stopmove_listener(
+        self, cb: Callable[[int, int, int], None],
+    ) -> None:
+        self._stopmove_listeners.append(cb)
+
+    def remove_entity_stopmove_listener(
+        self, cb: Callable[[int, int, int], None],
+    ) -> None:
+        try:
+            self._stopmove_listeners.remove(cb)
         except ValueError:
             pass
 
@@ -498,6 +512,8 @@ class PacketSniffer:
                 logger.info("Entity stop: GID=%d pos=(%d,%d)", gid, x, y)
             else:
                 ent.x, ent.y, ent.last_seen = x, y, now
+        for lst in self._stopmove_listeners:
+            _safe_call(lst, gid, x, y)
 
 
 def _clone(ent: EntityState) -> EntityState:

@@ -19,16 +19,9 @@
       },
       {
         "anchor": "TR",
-        "inset_x": 130,
+        "inset_x": 120,
         "inset_y": 0,
-        "width": 150,
-        "height": 70
-      },
-      {
-        "anchor": "TR",
-        "inset_x": 0,
-        "inset_y": 0,
-        "width": 130,
+        "width": 160,
         "height": 70
       },
       {
@@ -69,7 +62,6 @@
       "allowed": [
         "Muka",
         "Porcellio",
-        "Metaling",
         "Alligator",
         "Myst Case",
         "Peco Peco Egg",
@@ -81,7 +73,8 @@
         "Peco Peco",
         "Kobold",
         "Parasite",
-        "Dragon Tail"
+        "Dragon Tail",
+        "Geographer"
       ],
       "dangerous": [
         "Hunter Fly",
@@ -108,11 +101,11 @@
       }
     ],
     "engagement": {
-      "kill_timeout_sec": 12.0,
+      "kill_timeout_sec": 15.0,
       "blacklist_sec": 10.0,
       "reaim_click_cooldown_sec": 0.3,
       "aim_settle_sec": 0.1,
-      "target_settle_sec": 2.0,
+      "target_settle_sec": 0.5,
       "path_stuck_min_dist": 5,
       "path_stuck_timeout_sec": 1.5,
       "path_stuck_blacklist_sec": 5.0,
@@ -127,18 +120,23 @@
     "heal": {
       "key": "q",
       "cooldown_sec": 0.2,
-      "min_hp": 2000
+      "min_hp": 1500,
+      "save_recovery_check_sec": 5.0,
+      "save_recovery_key": "h"
     },
     "death_return": {
       "hp_at_most": 1,
       "delta_y_cells": -3.7,
       "second_delta_x_cells": 1.7,
-      "second_delta_y_cells": 2.5
+      "second_delta_y_cells": 2.5,
+      "town_return_retry_sec": 8.0,
+      "town_return_escape_key": "escape"
     },
     "idle_action": {
       "key": "t",
-      "after_sec": 3.0,
-      "after_kill_sec": 1.0
+      "after_sec": 0.5,
+      "after_kill_sec": 0.5,
+      "suppress_while_visible_name": true
     },
     "overweight": {
       "ratio": 0.9,
@@ -153,21 +151,21 @@
       {
         "order": 1,
         "key": "f",
-        "interval_sec": 1800.0
+        "interval_sec": 1740.0
       },
       {
         "order": 2,
         "key": "c",
-        "interval_sec": 1200.0
+        "interval_sec": 1140.0
       }
     ],
     "return_to_farm": {
-      "home_navigation_enabled": true,
+      "home_navigation_enabled": false,
       "walk_cells": 3,
       "settle_sec": 1.5,
       "retry_sec": 5.0,
       "max_retries": 4,
-      "active_farm_map": "um_fild03",
+      "active_farm_map": "cmd_fild01",
       "maps": {
         "um_fild03": {
           "um_fild02": "right",
@@ -185,6 +183,11 @@
           "moc_fild13": "up",
           "moc_fild01": "down",
           "pay_fild04": "down"
+        },
+        "ein_fild04": {
+          "ein_fild03": "right",
+          "einbroch": "up",
+          "ein_fild05": "left"
         }
       }
     }

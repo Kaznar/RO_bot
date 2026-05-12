@@ -1,12 +1,18 @@
 """Critical-HP walk click toward a town warp (same outcome as manual ``h``).
 
-When memory HP crosses from above ``hp_at_most`` down into ``(0, hp_at_most]``,
-we issue one or two ground :meth:`~ro_bot.hunt.aim_service.AimService.aim_and_click`
+When memory HP crosses from above ``hp_at_most`` down into ``(0, hp_at_most]``
+(typically **1 HP** on the death screen; ``0`` is ignored as stale) **and**
+the sniffer agrees (memory HP can glitch while sniffer HP stays high), we
+issue one or two ground :meth:`~ro_bot.hunt.aim_service.AimService.aim_and_click`
 calls: first at ``player + (delta_x_cells, delta_y_cells)``; when
 ``second_delta_*`` are both set, a second click at the first target plus those
 offsets. After the client warps to a map
 listed in ``manual_control_maps``, :class:`~ro_bot.hunt.controller.HuntController`
 already suspends automation like after a butterfly-wing return.
+
+If the character stays on a hunt map, :meth:`tick` presses
+``town_return_escape_key`` after ``town_return_retry_sec`` and repeats the walk
+clicks (e.g. death dialog blocking the warp).
 
 ``delta_y_cells`` defaults negative so that ``player_y + delta`` moves toward
 map south when ``+Y`` is north (common RO layout). Flip the sign if your client
@@ -18,7 +24,9 @@ from __future__ import annotations
 import logging
 import time
 
+from ro_bot.core.hid.bridge import HidBridge
 from ro_bot.core.memory.player_state import PlayerState
+from ro_bot.core.network.sniffer import PacketSniffer
 from ro_bot.hunt.aim_service import AimService
 from ro_bot.hunt.config import DeathReturnConfig
 
@@ -31,56 +39,169 @@ class DeathReturnPolicy:
     def __init__(
         self,
         cfg: DeathReturnConfig,
+        bridge: HidBridge,
         aim: AimService,
+        sniffer: PacketSniffer,
         manual_control_maps: frozenset[str],
         *,
         all_maps: bool = False,
     ) -> None:
         self._cfg = cfg
+        self._bridge = bridge
         self._aim = aim
+        self._sniffer = sniffer
         self._manual_control_maps = manual_control_maps
         self._all_maps = all_maps
         self._prev_hp: int | None = None
-        #: After a successful first ground click, ignore further edges until
-        #: :meth:`on_map_reset` (memory HP can briefly read above the band and
-        #: would otherwise re-arm the edge on the same map).
+        #: After walk clicks, ignore further edges until town warp or retry.
         self._walk_click_latched: bool = False
+        self._walk_clicked_at: float | None = None
 
     def on_map_reset(self) -> None:
         self._prev_hp = None
-        self._walk_click_latched = False
+        self._clear_return_pending()
 
     def tick(
         self,
         current_map: str,
         st: PlayerState | None,
+        now: float,
     ) -> bool:
         """Return True if the controller should stop the rest of this tick."""
+        if not self._automation_ok(current_map):
+            return False
+
+        if self._walk_click_latched:
+            if self._sniffer_clears_pending():
+                self._clear_return_pending()
+                return False
+            return self._maybe_town_return_retry(now, current_map, st)
+
         if st is None or st.hp_max <= 0:
             self._prev_hp = None
             return False
 
         hp = st.hp
         prev = self._prev_hp
-        self._prev_hp = hp
-
-        if not self._automation_ok(current_map):
-            return False
-
         n = self._cfg.hp_at_most
-        if self._walk_click_latched:
-            return False
-
         if hp <= 0 or hp > n:
+            self._prev_hp = hp
             return False
 
         if prev is None or prev <= n:
+            self._prev_hp = hp
             return False
+
+        if not self._sniffer_confirms_crit():
+            logger.debug(
+                "Death return: memory HP=%d crossed into band but sniffer "
+                "HP is not critical — ignored",
+                hp,
+            )
+            return False
+
+        self._prev_hp = hp
 
         px, py = st.x, st.y
         if px == 0 and py == 0:
             return False
 
+        if not self._issue_walk_clicks(px, py, hp, st.hp_max, current_map):
+            return False
+        self._arm_return_pending(now)
+        return True
+
+    def _arm_return_pending(self, now: float) -> None:
+        self._walk_click_latched = True
+        self._walk_clicked_at = now
+
+    def _clear_return_pending(self) -> None:
+        self._walk_click_latched = False
+        self._walk_clicked_at = None
+
+    def _maybe_town_return_retry(
+        self,
+        now: float,
+        current_map: str,
+        st: PlayerState | None,
+    ) -> bool:
+        retry_sec = self._cfg.town_return_retry_sec
+        if retry_sec <= 0 or self._walk_clicked_at is None:
+            return False
+        if now - self._walk_clicked_at < retry_sec:
+            return False
+
+        if self._sniffer_clears_pending():
+            self._clear_return_pending()
+            return False
+
+        if not self._all_maps and current_map in self._manual_control_maps:
+            self._clear_return_pending()
+            return False
+
+        escape = (self._cfg.town_return_escape_key or "").strip()
+        if escape:
+            try:
+                self._bridge.press_key(escape)
+            except Exception:
+                logger.exception(
+                    "Death return: press_key(%r) failed (town retry)", escape,
+                )
+            else:
+                logger.warning(
+                    "Death return: pressed %r — still on %s, retrying walk clicks",
+                    escape, current_map,
+                )
+
+        self._walk_clicked_at = now
+        self._walk_click_latched = False
+
+        if st is None or st.hp_max <= 0:
+            self._arm_return_pending(now)
+            return True
+
+        hp = st.hp
+        n = self._cfg.hp_at_most
+        if hp <= 0 or hp > n or not self._sniffer_confirms_crit():
+            self._arm_return_pending(now)
+            return True
+
+        px, py = st.x, st.y
+        if px == 0 and py == 0:
+            self._arm_return_pending(now)
+            return True
+
+        if self._issue_walk_clicks(px, py, hp, st.hp_max, current_map):
+            self._arm_return_pending(now)
+            return True
+        return True
+
+    def _sniffer_confirms_crit(self) -> bool:
+        hp_sn, hp_max_sn = self._sniffer.get_player_hp()
+        if hp_max_sn <= 0 or hp_sn <= 0:
+            return False
+        return hp_sn <= self._cfg.hp_at_most
+
+    def _sniffer_clears_pending(self) -> bool:
+        hp_sn, hp_max_sn = self._sniffer.get_player_hp()
+        if hp_max_sn <= 0 or hp_sn <= 0:
+            return False
+        if hp_sn > self._cfg.hp_at_most:
+            logger.info(
+                "Death return: sniffer HP=%d/%d above band — aborting",
+                hp_sn, hp_max_sn,
+            )
+            return True
+        return False
+
+    def _issue_walk_clicks(
+        self,
+        px: int,
+        py: int,
+        hp: int,
+        hp_max: int,
+        current_map: str,
+    ) -> bool:
         target = (
             float(px) + self._cfg.delta_x_cells,
             float(py) + self._cfg.delta_y_cells,
@@ -95,7 +216,6 @@ class DeathReturnPolicy:
         except Exception:
             logger.exception("Death return: aim_and_click failed")
             return False
-        self._walk_click_latched = True
 
         sx = self._cfg.second_delta_x_cells
         sy = self._cfg.second_delta_y_cells
@@ -124,7 +244,7 @@ class DeathReturnPolicy:
                 px,
                 py,
                 hp,
-                st.hp_max,
+                hp_max,
                 current_map,
             )
         else:
@@ -136,7 +256,7 @@ class DeathReturnPolicy:
                 px,
                 py,
                 hp,
-                st.hp_max,
+                hp_max,
                 current_map,
             )
         return True

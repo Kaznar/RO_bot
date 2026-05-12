@@ -42,6 +42,7 @@ from ro_bot.core.memory.entity_scanner import (
     find_entity_addrs_batch,
     read_entity_pos,
 )
+from ro_bot.core.memory.offsets import MAP_COORD_MAX, MAP_COORD_MIN
 from ro_bot.core.memory.process import ProcessHandle
 from ro_bot.core.network.sniffer import PacketSniffer
 
@@ -62,12 +63,19 @@ SPAWN_QUEUE_MAX = 256
 # the full 2 GB heap to ~4 MB (≈500× fewer chunks to walk).
 SCAN_RANGE_PADDING = 0x200000
 
+# Idle poll while the spawn queue is empty.
+SCANNER_QUEUE_POLL_SEC = 0.05
+
 
 @dataclass
 class _Entry:
     """Resolved entity cache row."""
     gid_addr: int
     name: str
+
+
+def _valid_map_cell(x: int, y: int) -> bool:
+    return MAP_COORD_MIN <= x <= MAP_COORD_MAX and MAP_COORD_MIN <= y <= MAP_COORD_MAX
 
 
 class EntityTracker:
@@ -110,6 +118,33 @@ class EntityTracker:
         self._scans_failed: int = 0
         self._dropped_spawns: int = 0
         self._filtered_spawns: int = 0
+        self._queued_resolve: set[int] = set()
+
+    def _should_track_entity(self, gid: int, name: str) -> bool:
+        if self._should_track is None:
+            return True
+        return self._should_track(gid, name)
+
+    def _enqueue_resolve(self, gid: int, name: str) -> None:
+        if not self._should_track_entity(gid, name):
+            return
+        with self._lock:
+            if gid in self._cache or gid in self._queued_resolve:
+                return
+            self._queued_resolve.add(gid)
+        try:
+            self._spawn_q.put_nowait((gid, name))
+        except queue.Full:
+            self._dropped_spawns += 1
+            with self._lock:
+                self._queued_resolve.discard(gid)
+            try:
+                self._spawn_q.get_nowait()
+                self._spawn_q.put_nowait((gid, name))
+                with self._lock:
+                    self._queued_resolve.add(gid)
+            except (queue.Empty, queue.Full):
+                pass
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -120,6 +155,7 @@ class EntityTracker:
         self._sniffer.set_entity_spawn_callback(self._on_spawn)
         self._sniffer.set_entity_vanish_callback(self._on_vanish)
         self._sniffer.set_map_change_callback(self._on_map_change)
+        self._sniffer.add_entity_stopmove_listener(self._on_stopmove_packet)
         self._scanner = threading.Thread(
             target=self._scanner_loop, daemon=True, name="entity-tracker-scan",
         )
@@ -131,6 +167,7 @@ class EntityTracker:
         self._sniffer.set_entity_spawn_callback(None)
         self._sniffer.set_entity_vanish_callback(None)
         self._sniffer.set_map_change_callback(None)
+        self._sniffer.remove_entity_stopmove_listener(self._on_stopmove_packet)
         if self._scanner is not None and self._scanner.is_alive():
             self._scanner.join(timeout=2.0)
         self._scanner = None
@@ -148,39 +185,75 @@ class EntityTracker:
             return None
         with self._lock:
             entry = self._cache.get(gid)
-        if entry is None:
-            return None
-        pos = read_entity_pos(self._process, entry.gid_addr, gid)
-        if pos is None:
-            # Slot was recycled; drop so we re-resolve on next spawn.
+        if entry is not None:
+            pos = read_entity_pos(self._process, entry.gid_addr, gid)
+            if pos is not None:
+                return pos
             with self._lock:
                 self._cache.pop(gid, None)
+        return self._sniffer_packet_position(gid)
+
+    def _sniffer_packet_position(self, gid: int) -> tuple[int, int] | None:
+        ent = self._sniffer.get_entity(gid)
+        if ent is None or not ent.name:
             return None
-        return pos
+        if not _valid_map_cell(ent.x, ent.y):
+            return None
+        return (ent.x, ent.y)
 
     def get_all_positions(self) -> list[tuple[int, str, int, int]]:
-        """Snapshot of ``[(gid, name, x, y), ...]`` for every resolved
-        entity whose slot is still readable. Recycled slots are purged
-        from the cache as a side-effect.
+        """Snapshot of ``[(gid, name, x, y), ...]`` for tracked entities.
+
+        Memory-resolved slots are preferred; plaintext ``0x0088`` cells from
+        the sniffer fill the gap until the heap scan catches up.
         """
         if time.monotonic() < self._invalidate_until:
             return []
         with self._lock:
             snapshot = list(self._cache.items())
 
-        out: list[tuple[int, str, int, int]] = []
+        resolved: dict[int, tuple[str, int, int]] = {}
         recycled: list[int] = []
         for gid, entry in snapshot:
             pos = read_entity_pos(self._process, entry.gid_addr, gid)
             if pos is None:
                 recycled.append(gid)
                 continue
-            out.append((gid, entry.name, pos[0], pos[1]))
+            resolved[gid] = (entry.name, pos[0], pos[1])
 
         if recycled:
             with self._lock:
                 for gid in recycled:
                     self._cache.pop(gid, None)
+                    self._queued_resolve.discard(gid)
+
+        for ent in self._sniffer.get_all_entities():
+            if not ent.name or not self._should_track_entity(ent.gid, ent.name):
+                continue
+            if ent.gid in resolved:
+                continue
+            if not _valid_map_cell(ent.x, ent.y):
+                self._enqueue_resolve(ent.gid, ent.name)
+                continue
+            resolved[ent.gid] = (ent.name, ent.x, ent.y)
+            self._enqueue_resolve(ent.gid, ent.name)
+
+        return [
+            (gid, name, x, y)
+            for gid, (name, x, y) in resolved.items()
+        ]
+
+    def get_awaiting_position_entities(self) -> list[tuple[int, str]]:
+        """Tracked sniffer entities that have a name but no cell yet."""
+        if time.monotonic() < self._invalidate_until:
+            return []
+        out: list[tuple[int, str]] = []
+        for ent in self._sniffer.get_all_entities():
+            if not ent.name or not self._should_track_entity(ent.gid, ent.name):
+                continue
+            if _valid_map_cell(ent.x, ent.y):
+                continue
+            out.append((ent.gid, ent.name))
         return out
 
     def cache_size(self) -> int:
@@ -190,28 +263,31 @@ class EntityTracker:
     # ── Sniffer callbacks (sniffer thread — must be quick) ──────────
 
     def _on_spawn(self, gid: int, name: str) -> None:
-        if self._should_track is not None and not self._should_track(gid, name):
+        if not self._should_track_entity(gid, name):
             self._filtered_spawns += 1
             return
-        try:
-            self._spawn_q.put_nowait((gid, name))
-        except queue.Full:
-            self._dropped_spawns += 1
-            # Drop oldest, retry. Acceptable for a passive tracker.
-            try:
-                self._spawn_q.get_nowait()
-                self._spawn_q.put_nowait((gid, name))
-            except (queue.Empty, queue.Full):
-                pass
+        self._enqueue_resolve(gid, name)
+
+    def _on_stopmove_packet(self, gid: int, x: int, y: int) -> None:
+        if time.monotonic() < self._invalidate_until:
+            return
+        if not _valid_map_cell(x, y):
+            return
+        ent = self._sniffer.get_entity(gid)
+        if ent is None or not ent.name:
+            return
+        self._enqueue_resolve(gid, ent.name)
 
     def _on_vanish(self, gid: int, _vanish_type: int) -> None:
         with self._lock:
             self._cache.pop(gid, None)
+            self._queued_resolve.discard(gid)
 
     def _on_map_change(self, _map: str, _x: int, _y: int) -> None:
         self._invalidate_until = time.monotonic() + MAP_CHANGE_GRACE_SEC
         with self._lock:
             self._cache.clear()
+            self._queued_resolve.clear()
         # Drop pending spawns from the previous map; engine will re-emit.
         while True:
             try:
@@ -224,7 +300,7 @@ class EntityTracker:
     def _scanner_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                first = self._spawn_q.get(timeout=0.5)
+                first = self._spawn_q.get(timeout=SCANNER_QUEUE_POLL_SEC)
             except queue.Empty:
                 continue
             # Greedy drain: coalesce everything else queued in the
@@ -293,6 +369,7 @@ class EntityTracker:
                     self._cache[gid] = _Entry(
                         gid_addr=addr, name=name_by_gid[gid],
                     )
+                    self._queued_resolve.discard(gid)
 
         n = len(name_by_gid)
         scope = (
@@ -310,6 +387,8 @@ class EntityTracker:
                 )
             else:
                 self._scans_failed += 1
+                with self._lock:
+                    self._queued_resolve.discard(gid)
                 logger.debug(
                     "Scanner: GID=%d '%s' not found "
                     "(batch=%d, scope=%s, %.2fs)",

@@ -41,6 +41,10 @@ class AimService:
         self._aim_offsets = aim_map
         self._last_click_at: float = 0.0
 
+    def set_client_rect(self, rect: WindowRect) -> None:
+        """Refresh client→screen mapping (e.g. after the game window moved)."""
+        self._rect = rect
+
     @property
     def last_click_at(self) -> float:
         return self._last_click_at

@@ -83,7 +83,7 @@ def run_home_prep_dev_loop(
 
     logger.info(
         "home-prep-dev: waiting for map=%r (not farm=%r); then %.1fs settle; "
-        "Numpad 0 exits",
+        "F9 exits",
         hm,
         farm,
         settle_after_home_sec,
@@ -129,7 +129,7 @@ def run_home_prep_dev_loop(
             policy.tick(now, m)
             if policy.run_finished:
                 logger.info(
-                    "home-prep-dev: done — leave %s or press Numpad 0",
+                    "home-prep-dev: done — leave %s or press F9",
                     hm,
                 )
                 policy = None

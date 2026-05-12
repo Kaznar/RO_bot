@@ -27,3 +27,9 @@ class CmdFild01Paths:
             FarmRouteWaypoint("cmd_fild01", 75, 361),
             FarmRouteWaypoint("cmd_fild01", 77, 366),
         )
+
+    @staticmethod
+    def cmd_fild01_farm_anchor() -> tuple[FarmRouteWaypoint, ...]:
+        """Spawn cell after beach_dun3 warp → cmd_fild01 warp"""
+        return (FarmRouteWaypoint("cmd_fild01", 30, 317),)
+

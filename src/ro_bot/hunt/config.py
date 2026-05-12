@@ -46,10 +46,16 @@ class HealConfig:
 
     Set ``min_hp = 0`` to disable healing entirely while keeping the
     rest of the heal block (e.g. its key) configured.
+
+    After the emergency save teleport (HP below 50% of ``min_hp``), wait
+    ``save_recovery_check_sec`` and press ``save_recovery_key`` if HP is
+    still below ``min_hp`` (e.g. no potions left). ``0`` disables the check.
     """
     key: str
     min_hp: int
     cooldown_sec: float = 1.0
+    save_recovery_check_sec: float = 5.0
+    save_recovery_key: str = "h"
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,9 @@ class IdleActionConfig:
     key: str
     after_sec: float = 10.0
     after_kill_sec: float = 2.0
+    #: While the sniffer still lists a whitelisted mob name, do not count
+    #: idle time toward ``after_sec`` / ``after_kill_sec`` (position may lag).
+    suppress_while_visible_name: bool = True
 
 
 @dataclass(frozen=True)
@@ -68,6 +77,14 @@ class DeathReturnConfig:
     first_target + (second_delta_x_cells, second_delta_y_cells).
 
     See :mod:`ro_bot.hunt.policies.death_return`.
+
+    Many RO clients report **1 HP** on the death screen, not 0; keep
+    ``hp_at_most`` at that value (often ``1``). Memory ``hp == 0`` is
+    treated as stale / unknown, not as the normal death UI state.
+
+    If walk clicks do not reach a manual-control town map within
+    ``town_return_retry_sec``, press ``town_return_escape_key`` and repeat
+    the walk clicks. ``0`` disables the retry loop.
     """
     hp_at_most: int = 1
     delta_x_cells: float = 0.0
@@ -76,6 +93,8 @@ class DeathReturnConfig:
     second_delta_x_cells: float | None = None
     second_delta_y_cells: float | None = None
     second_click_delay_sec: float = 0.12
+    town_return_retry_sec: float = 8.0
+    town_return_escape_key: str = "escape"
 
 
 @dataclass(frozen=True)
@@ -160,6 +179,13 @@ class HomePrepStep:
     If ``key`` is set, it is pressed after **each** drag (before the inter-drag
     ``click_cell_drag_repeat_interval_sec`` pause).
 
+    ``click_client`` + ``drag_to_client`` + optional
+    ``click_client_drag_repeat_count``: LMB drags in **client** pixels (HUD),
+    stable when the game window moves on the desktop. ``0`` = one drag;
+    ``>0`` repeats. Re-tune after resolution / skin change. Avoid a separate
+    prior step that full-clicks the same ``click_client`` pixel: that click
+    completes before the drag and can prevent the client from starting a drag.
+
     ``dismiss_chat_probe_client``: optional client pixel sampled at the **start**
     of the step (before clicks / keys). If ``max(R,G,B) >= dismiss_chat_min_channel``,
     the **white chat input** is assumed visible and ``dismiss_chat_key`` is pressed
@@ -176,6 +202,16 @@ class HomePrepStep:
     click_client: tuple[int, int] | None = None
     #: With ``click_client``: LMB drag start → end in client pixels.
     drag_to_client: tuple[int, int] | None = None
+    #: Client drag repeat (requires ``click_client`` + ``drag_to_client``).
+    #: ``0`` runs **one** drag; ``>0`` runs that many drags (same cadence idea
+    #: as ``click_cell_drag_repeat_count`` on the map).
+    click_client_drag_repeat_count: int = 0
+    click_client_drag_repeat_interval_sec: float = 0.25
+    #: ``0`` = home-prep default before LMB down on client drags.
+    click_client_drag_settle_before_down_sec: float = 0.0
+    #: ``0`` = :meth:`~ro_bot.hunt.aim_service.AimService.drag_client_pixels`
+    #: default segment count.
+    click_client_drag_segments: int = 0
     hold_modifiers: tuple[str, ...] = ()
     #: Mouse clicks while ``hold_modifiers`` are held (0 = off).
     modifier_hold_clicks: int = 0
@@ -323,6 +359,15 @@ class EngagementConfig:
     ks_guard_min_hp_deficit: int = 1
     ks_guard_blacklist_sec: float = 8.0
     abandon_target_key: str | None = None
+    #: While the player is within this Manhattan distance of a mob stack,
+    #: do not queue idle warp after abandonments (client may be fighting
+    #: a co-located sprite).
+    stack_cell_melee_dist: int = 2
+    #: Remember a preferred GID / cell for this long after stack combat.
+    stack_cell_resume_sec: float = 30.0
+    #: After this many abandons on the same cell without a kill, force idle
+    #: warp before re-engaging. ``0`` disables the ladder.
+    stack_cell_warp_after_abandons: int = 3
 
 
 @dataclass(frozen=True)

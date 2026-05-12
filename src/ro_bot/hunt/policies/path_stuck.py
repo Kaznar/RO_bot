@@ -60,6 +60,11 @@ class PathStuckPolicy:
             return False
         if now - state.engaged_at < self._cfg.path_stuck_timeout_sec:
             return False
+        if state.last_aim_cell is not None:
+            px, py = player_cell
+            mx, my = state.last_aim_cell
+            if abs(mx - px) + abs(my - py) < self._cfg.path_stuck_min_dist:
+                return False
         return player_cell == state.player_cell_at_engage
 
     def abandon(

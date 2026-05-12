@@ -27,3 +27,7 @@ HP_SNAPSHOT_INTERVAL_SEC: float = 5.0
 # Carried-weight INFO cadence (memory `PlayerReader`, see
 # `MemoryOffsets.weight_*`).
 WEIGHT_SNAPSHOT_INTERVAL_SEC: float = 5.0
+
+# Extra grace on top of kill timeout + idle windows before the hunt
+# automation stall watchdog forces recovery.
+AUTOMATION_STALL_SLACK_SEC: float = 5.0

@@ -39,6 +39,7 @@ import time
 
 from ro_bot.core.hid.bridge import HidBridge
 from ro_bot.core.memory.player_state import PlayerReader, PlayerState
+from ro_bot.core.window import get_client_rect
 from ro_bot.core.network.packets import VanishType
 from ro_bot.core.network.sniffer import PacketSniffer
 from ro_bot.core.tracking.entity_tracker import EntityTracker
@@ -64,12 +65,22 @@ from ro_bot.hunt.policies.heal import HealPolicy
 from ro_bot.hunt.policies.idle_action import IdleActionPolicy
 from ro_bot.hunt.policies.overweight import OverweightPolicy
 from ro_bot.hunt.policies.approach_stall import ApproachStallPolicy
+from ro_bot.hunt.policies.automation_stall import (
+    AutomationStallGuard,
+    automation_stall_limit_sec,
+    recover_automation_stall,
+)
 from ro_bot.hunt.policies.path_stuck import PathStuckPolicy
 from ro_bot.hunt.policies.remote_contested import RemoteContestedPolicy
 from ro_bot.hunt.policies.farm_home_route import FarmHomeRoutePolicy
 from ro_bot.hunt.policies.home_prep import HomePrepPolicy
 from ro_bot.hunt.policies.return_to_farm import ReturnToFarmPolicy
-from ro_bot.hunt.policies.targeting import collect_candidates, pick_nearest
+from ro_bot.hunt.policies.stack_cell import (
+    pick_candidate,
+    player_near_cell,
+    should_defer_warp_near_stack,
+)
+from ro_bot.hunt.policies.targeting import collect_candidates
 
 logger = logging.getLogger("ro_bot.hunt")
 
@@ -95,6 +106,7 @@ class HuntController:
         self._tracker = tracker
         self._player_reader = player_reader
         self._game_hwnd = game_hwnd
+        self._aim = aim
 
         self._events = EventBus()
         self._cells = CellObserver(cfg.engagement.target_settle_sec)
@@ -124,7 +136,9 @@ class HuntController:
         self._death_return = (
             DeathReturnPolicy(
                 cfg.death_return,
+                bridge,
                 aim,
+                sniffer,
                 cfg.manual_control_maps,
                 all_maps=cfg.ignore_map_restrictions,
             )
@@ -142,6 +156,7 @@ class HuntController:
             IdleActionPolicy(cfg.idle_action, bridge)
             if cfg.idle_action is not None else None
         )
+        self._stall_guard = AutomationStallGuard(automation_stall_limit_sec(cfg))
         self._overweight = (
             OverweightPolicy(cfg.overweight, bridge)
             if cfg.overweight is not None else None
@@ -190,6 +205,10 @@ class HuntController:
         self._pending_warp_return_idle_reason: str | None = None
         #: Previous ``map_name`` from the last sniffer map callback (0091).
         self._map_change_listener_prev: str | None = None
+        self._stack_preferred_gid: int | None = None
+        self._stack_preferred_cell: tuple[int, int] | None = None
+        self._stack_preferred_until: float = 0.0
+        self._stack_cell_abandon_counts: dict[tuple[int, int], int] = {}
 
     @staticmethod
     def _make_farm_home_route_policy(
@@ -240,6 +259,7 @@ class HuntController:
         self._sniffer.add_entity_vanish_listener(self._on_vanish)
         self._sniffer.add_map_change_listener(self._on_map_change)
         self._buffs.install()
+        self._stall_guard.reset(time.monotonic())
         self._installed = True
         logger.info(
             "HuntController installed: char='%s' allowed=%s manual_control_maps=%s "
@@ -316,6 +336,7 @@ class HuntController:
             self._last_weight_log += delta
         if self._dead_zone_blocked_since is not None:
             self._dead_zone_blocked_since += delta
+        self._stall_guard.shift(delta)
         logger.info("Resumed after %.1fs paused", delta)
 
     # ── Tick interval ───────────────────────────────────────────────
@@ -367,11 +388,12 @@ class HuntController:
                 self._pending_warp_return_idle_tp = False
                 self._pending_warp_return_idle_reason = None
             elif self._idle is not None:
-                self._idle.force_fire(
+                if self._idle.force_fire(
                     now,
                     self._pending_warp_return_idle_reason
                     or "warp escape before hunt",
-                )
+                ):
+                    self._stall_guard.mark_progress(now)
                 self._pending_warp_return_idle_tp = False
                 self._pending_warp_return_idle_reason = None
                 return
@@ -387,14 +409,22 @@ class HuntController:
             self._farm_home_route is not None
             and self._farm_home_route.should_automate_on_map(current_map)
         )
-        if self._is_manual_control_map(current_map) and not route_automates:
+        rtf_active = (
+            self._return_to_farm is not None
+            and self._return_to_farm.is_active()
+        )
+        if (
+            self._is_manual_control_map(current_map)
+            and not route_automates
+            and not rtf_active
+        ):
             self._enter_manual_control_mode(current_map)
             return
         self._leave_manual_control_mode(current_map)
 
         st_dr = st_mem
         if self._death_return is not None:
-            if self._death_return.tick(current_map, st_dr):
+            if self._death_return.tick(current_map, st_dr, now):
                 if self._engagement.state.gid is not None:
                     self._engagement.state.clear()
                 if self._idle is not None:
@@ -421,9 +451,10 @@ class HuntController:
             self._handle_escape_tick()
             return
 
-        if survival:
-            return
-
+        # Town restock + home→farm waypoint navigation must run even while
+        # ``survival`` is true (HP in the death_return band on sniffer/memory).
+        # Otherwise ``if survival: return`` below skips :class:`HomePrepPolicy`
+        # entirely and restock never starts on ``home_map``.
         prep_suppress = False
         if self._home_prep is not None:
             self._home_prep.tick(now, current_map)
@@ -439,6 +470,9 @@ class HuntController:
                 if self._engagement.state.gid is not None:
                     self._engagement.state.clear()
                 return
+
+        if survival:
+            return
 
         if self._return_to_farm is not None and self._return_to_farm.is_active():
             if self._engagement.state.gid is not None:
@@ -466,6 +500,7 @@ class HuntController:
             self._overweight.tick(now)
             if not self._was_overweight_last_tick and self._idle is not None:
                 self._idle.on_map_reset()
+            self._stall_guard.mark_progress(now)
             self._was_overweight_last_tick = True
             return
         self._was_overweight_last_tick = False
@@ -478,9 +513,13 @@ class HuntController:
 
         player_cell = self._read_player_cell()
         if player_cell is None:
-            return
+            if self._maybe_recover_automation_stall(now, current_map):
+                player_cell = self._read_player_cell()
+            if player_cell is None:
+                return
 
         self._select_and_engage(visible, player_cell, now)
+        self._maybe_recover_automation_stall(now, current_map)
 
     # ── Helpers ─────────────────────────────────────────────────────
 
@@ -507,6 +546,8 @@ class HuntController:
         self._dead_zone_blocked_since = None
         if self._idle is not None:
             self._idle.on_map_reset()
+        self._clear_stack_state()
+        self._stall_guard.reset(time.monotonic())
         if self._death_return is not None:
             self._death_return.on_map_reset()
         if self._farm_home_route is not None:
@@ -521,6 +562,17 @@ class HuntController:
                 self._return_to_farm.on_map_change(map_name, time.monotonic())
         if self._overweight is not None:
             self._overweight.on_map_reset()
+        self._refresh_client_rect_from_window()
+
+    def _refresh_client_rect_from_window(self) -> None:
+        """Re-read client area so HUD ``click_client`` stays aligned if the window moved."""
+        if self._game_hwnd is None:
+            return
+        rect = get_client_rect(self._game_hwnd)
+        self._aim.set_client_rect(rect)
+        self._dead_zone_filter = dataclasses.replace(
+            self._dead_zone_filter, rect=rect,
+        )
 
     def arm_farm_home_route_after_manual_town_prep(self) -> None:
         """Standalone ``home-prep``: same arming as a 0091 town entry (no sniffer pair)."""
@@ -539,6 +591,16 @@ class HuntController:
         if not hm:
             return
         for old_map, new_map in pairs:
+            if (
+                self._return_to_farm is not None
+                and self._return_to_farm.is_configured_neighbor(new_map)
+            ):
+                logger.info(
+                    "Map change %s → %s: skip town prep/home route "
+                    "(configured active-farm neighbor walk-back)",
+                    old_map, new_map,
+                )
+                continue
             if (
                 new_map == hm
                 and old_map is not None
@@ -686,9 +748,17 @@ class HuntController:
                 "Target killed: gid=%d name='%s' after %.2fs (kills=%d)",
                 state.gid, state.name, duration, self._kills,
             )
+            killed_cell = self._cells.settled_cell(state.gid, now)
+            if killed_cell is not None:
+                self._remember_stack_preference(
+                    now,
+                    preferred_cell=killed_cell,
+                )
+                self._reset_stack_abandon_count(killed_cell)
             state.clear()
             if self._idle is not None:
                 self._idle.on_kill()
+            self._stall_guard.mark_progress(now)
             return False
         if state.gid in lost:
             logger.info(
@@ -696,6 +766,7 @@ class HuntController:
                 state.gid, state.name,
             )
             state.clear()
+            self._stall_guard.mark_progress(now)
             return False
         if now - state.engaged_at > self._cfg.engagement.kill_timeout_sec:
             self._handle_kill_timeout(state, now)
@@ -705,9 +776,32 @@ class HuntController:
         if player_cell is None:
             return True
 
+        engaged_cell = self._cells.settled_cell(state.gid, now)
+        if engaged_cell is not None:
+            for d_gid in died:
+                if d_gid == state.gid:
+                    continue
+                dead_cell = self._cells.settled_cell(d_gid, now)
+                if dead_cell != engaged_cell:
+                    continue
+                logger.info(
+                    "Stack co-kill: gid=%d died on cell %s while engaged "
+                    "gid=%d name='%s'",
+                    d_gid, engaged_cell, state.gid, state.name,
+                )
+                self._remember_stack_preference(
+                    now,
+                    preferred_gid=state.gid,
+                    preferred_cell=engaged_cell,
+                )
+                self._stall_guard.mark_progress(now)
+                state.approach_anchor_cell = player_cell
+                state.approach_stationary_since = now
+
         if self._path_stuck.is_stuck(state, player_cell, now):
+            abandon_cell = state.last_aim_cell
             self._path_stuck.abandon(state, player_cell, now)
-            self._immediate_teleport_pending = True
+            self._after_stack_abandon(player_cell, abandon_cell, now)
             if self._idle is not None:
                 self._idle.on_timeout()
             return False
@@ -723,7 +817,7 @@ class HuntController:
                 self._remote_contested.abandon(
                     state, player_cell, settled, ent.hp, ent.max_hp,
                 )
-                self._immediate_teleport_pending = True
+                self._after_stack_abandon(player_cell, settled, now)
                 self._press_abandon_target_key("ks_guard")
                 if self._idle is not None:
                     self._idle.on_timeout()
@@ -735,7 +829,7 @@ class HuntController:
                 self._approach_stall.abandon(
                     state, player_cell, settled, now,
                 )
-                self._immediate_teleport_pending = True
+                self._after_stack_abandon(player_cell, settled, now)
                 self._press_abandon_target_key("approach_stall")
                 if self._idle is not None:
                     self._idle.on_timeout()
@@ -754,10 +848,18 @@ class HuntController:
             "blacklist %.0fs (timeouts=%d)",
             state.gid, state.name, duration, bl_sec, self._timeouts,
         )
+        timed_out_cell = self._cells.settled_cell(state.gid, now)
+        if timed_out_cell is not None:
+            self._record_stack_abandon(timed_out_cell)
+            self._remember_stack_preference(
+                now,
+                preferred_cell=timed_out_cell,
+            )
         self._blacklist.add(state.gid, bl_sec)
         state.clear()
         if self._idle is not None:
             self._idle.on_timeout()
+        self._stall_guard.mark_progress(now)
 
     def _maybe_log_weight_snapshot(self, now: float) -> None:
         """Periodic INFO line from memory (same cadence idea as heal HP)."""
@@ -782,8 +884,9 @@ class HuntController:
         :class:`~ro_bot.hunt.policies.heal.HealPolicy` uses sniffer HP; walk
         clicks use memory. Either can stay at 1 while the other glitches, so
         we suppress heal / save-teleport / idle TP if **either** source is
-        critical (``0 < hp <= death_return.hp_at_most`` for sniffer; memory
-        includes ``hp == 0`` as dead/stale).
+        critical (``0 < hp <= death_return.hp_at_most`` for sniffer — often
+        **1 HP** on death; memory ``hp <= hp_at_most`` with ``hp == 0`` as
+        stale / unknown).
         """
         dr = self._cfg.death_return
         if dr is None:
@@ -805,15 +908,34 @@ class HuntController:
 
     def _read_player_cell(self) -> tuple[int, int] | None:
         s = self._read_player_state()
-        if s is None:
-            return None
-        return (s.x, s.y)
+        if s is not None:
+            return (s.x, s.y)
+        sx, sy = self._sniffer.get_player_pos()
+        if sx != 0 or sy != 0:
+            logger.debug(
+                "Using sniffer player cell (%d,%d) "
+                "(memory coordinates unavailable)",
+                sx, sy,
+            )
+            return (sx, sy)
+        return None
 
     def _entity_hp_pair(self, gid: int) -> tuple[int, int] | None:
         ent = self._sniffer.get_entity(gid)
         if ent is None:
             return None
         return (ent.hp, ent.max_hp)
+
+    def _sniffer_shows_trackable_mob_name(self) -> bool:
+        for ent in self._sniffer.get_all_entities():
+            if not ent.name:
+                continue
+            if (
+                self._cfg.target_all_mobs
+                or ent.name in self._cfg.allowed_names
+            ):
+                return True
+        return False
 
     def _press_abandon_target_key(self, reason: str) -> None:
         key = self._cfg.engagement.abandon_target_key
@@ -867,28 +989,168 @@ class HuntController:
                 if blocked_for < self._cfg.engagement.dead_zone_wait_sec:
                     self._immediate_teleport_pending = False
                     return
-                self._idle.force_fire(
+                if self._idle.force_fire(
                     now,
                     "dead-zone blocked "
                     f"{blocked_for:.1f}s — forcing teleport",
-                )
+                ):
+                    self._stall_guard.mark_progress(now)
                 self._dead_zone_blocked_since = now
                 self._immediate_teleport_pending = False
                 return
             self._dead_zone_blocked_since = None
             if self._immediate_teleport_pending:
-                self._idle.force_fire(now, "path stuck — no other candidates")
+                if self._idle.force_fire(now, "path stuck — no other candidates"):
+                    self._stall_guard.mark_progress(now)
                 self._immediate_teleport_pending = False
-            else:
-                self._idle.tick(now)
+            elif (
+                self._cfg.idle_action is not None
+                and self._cfg.idle_action.suppress_while_visible_name
+                and self._sniffer_shows_trackable_mob_name()
+            ):
+                self._idle.on_visible_trackable_name()
+            elif self._idle.tick(now):
+                self._stall_guard.mark_progress(now)
             return
+
+        if self._should_force_stack_warp(
+            player_cell, result.candidates, now,
+        ):
+            if self._idle is not None and self._idle.force_fire(
+                now,
+                "mob stack abandon ladder — warp before re-engage",
+            ):
+                self._stall_guard.mark_progress(now)
+            self._immediate_teleport_pending = False
+            return
+
+        if self._immediate_teleport_pending:
+            melee = self._cfg.engagement.stack_cell_melee_dist
+            if should_defer_warp_near_stack(
+                player_cell,
+                result.candidates,
+                preferred_cell=self._stack_preferred_cell,
+                melee_dist=melee,
+            ):
+                self._immediate_teleport_pending = False
+            elif self._idle is not None and self._idle.force_fire(
+                now,
+                "unreachable candidates — warp before re-engage",
+            ):
+                self._stall_guard.mark_progress(now)
+                self._immediate_teleport_pending = False
+                return
+            else:
+                self._immediate_teleport_pending = False
 
         self._dead_zone_blocked_since = None
         self._immediate_teleport_pending = False
-        target = pick_nearest(player_cell, result.candidates)
+        preferred_gid, preferred_cell = self._active_stack_preference(now)
+        target = pick_candidate(
+            player_cell,
+            result.candidates,
+            preferred_gid=preferred_gid,
+            preferred_cell=preferred_cell,
+        )
         if self._idle is not None:
             self._idle.on_engaged()
+        self._remember_stack_preference(
+            now,
+            preferred_gid=target.gid,
+            preferred_cell=(target.x, target.y),
+        )
         self._engagement.engage(target, player_cell, now)
+        self._stall_guard.mark_progress(now)
+
+    def _clear_stack_state(self) -> None:
+        self._stack_preferred_gid = None
+        self._stack_preferred_cell = None
+        self._stack_preferred_until = 0.0
+        self._stack_cell_abandon_counts.clear()
+
+    def _remember_stack_preference(
+        self,
+        now: float,
+        *,
+        preferred_gid: int | None = None,
+        preferred_cell: tuple[int, int] | None = None,
+    ) -> None:
+        resume_sec = self._cfg.engagement.stack_cell_resume_sec
+        if resume_sec <= 0:
+            return
+        if preferred_gid is not None:
+            self._stack_preferred_gid = preferred_gid
+        if preferred_cell is not None:
+            self._stack_preferred_cell = preferred_cell
+        if (
+            self._stack_preferred_gid is not None
+            or self._stack_preferred_cell is not None
+        ):
+            self._stack_preferred_until = now + resume_sec
+
+    def _active_stack_preference(
+        self,
+        now: float,
+    ) -> tuple[int | None, tuple[int, int] | None]:
+        if now >= self._stack_preferred_until:
+            return None, None
+        return self._stack_preferred_gid, self._stack_preferred_cell
+
+    def _record_stack_abandon(self, mob_cell: tuple[int, int] | None) -> None:
+        if mob_cell is None:
+            return
+        self._stack_cell_abandon_counts[mob_cell] = (
+            self._stack_cell_abandon_counts.get(mob_cell, 0) + 1
+        )
+
+    def _reset_stack_abandon_count(self, mob_cell: tuple[int, int]) -> None:
+        self._stack_cell_abandon_counts.pop(mob_cell, None)
+
+    def _after_stack_abandon(
+        self,
+        player_cell: tuple[int, int],
+        mob_cell: tuple[int, int] | None,
+        now: float,
+    ) -> None:
+        self._record_stack_abandon(mob_cell)
+        self._remember_stack_preference(now, preferred_cell=mob_cell)
+        melee = self._cfg.engagement.stack_cell_melee_dist
+        if mob_cell is not None and player_near_cell(
+            player_cell,
+            mob_cell,
+            max_dist=melee,
+        ):
+            return
+        self._immediate_teleport_pending = True
+
+    def _should_force_stack_warp(
+        self,
+        player_cell: tuple[int, int],
+        candidates: list,
+        now: float,
+    ) -> bool:
+        limit = self._cfg.engagement.stack_cell_warp_after_abandons
+        if limit <= 0:
+            return False
+        cells: set[tuple[int, int]] = {
+            (candidate.x, candidate.y) for candidate in candidates
+        }
+        _, preferred_cell = self._active_stack_preference(now)
+        if preferred_cell is not None:
+            cells.add(preferred_cell)
+        melee = self._cfg.engagement.stack_cell_melee_dist
+        for cell in cells:
+            if self._stack_cell_abandon_counts.get(cell, 0) < limit:
+                continue
+            if should_defer_warp_near_stack(
+                player_cell,
+                candidates,
+                preferred_cell=cell,
+                melee_dist=melee,
+            ):
+                continue
+            return True
+        return False
 
     def _log_no_candidates(
         self,
@@ -907,21 +1169,57 @@ class HuntController:
                 else f" walking({age:.2f}s)"
             )
             parts.append(f"{name}@({x},{y}){settled}")
+        visible_gids = {gid for gid, _, _, _ in visible}
+        awaiting = [
+            f"{name}@(?)"
+            for gid, name in self._tracker.get_awaiting_position_entities()
+            if gid not in visible_gids
+        ]
         names_hint = (
             "(all mob names)"
             if self._cfg.target_all_mobs
             else sorted(self._cfg.allowed_names)
         )
+        awaiting_hint = ", ".join(awaiting) if awaiting else "none"
         logger.info(
             "no candidates (allowed=%s, blacklisted=%d, "
-            "dead_zone_blocked=%d, visible=%s)",
+            "dead_zone_blocked=%d, visible=%s, awaiting_pos=%s)",
             names_hint,
             len(self._blacklist),
             blocked,
             ", ".join(parts) if parts else "none",
+            awaiting_hint,
         )
 
     # ── Sniffer-thread callbacks ────────────────────────────────────
+
+    def _should_guard_hunt_automation(self, current_map: str) -> bool:
+        route_automates = (
+            self._farm_home_route is not None
+            and self._farm_home_route.should_automate_on_map(current_map)
+        )
+        if self._is_manual_control_map(current_map) and not route_automates:
+            return False
+        if self._return_to_farm is not None and self._return_to_farm.is_active():
+            return False
+        if self._farm_home_route is not None and self._farm_home_route.is_active():
+            return False
+        return True
+
+    def _maybe_recover_automation_stall(
+        self,
+        now: float,
+        current_map: str,
+    ) -> bool:
+        if not self._should_guard_hunt_automation(current_map):
+            self._stall_guard.mark_progress(now)
+            return False
+        return recover_automation_stall(
+            now=now,
+            guard=self._stall_guard,
+            idle=self._idle,
+            clear_engagement=self._engagement.state.clear,
+        )
 
     def _on_vanish(self, gid: int, vanish_type: int) -> None:
         if vanish_type == VanishType.DIED:

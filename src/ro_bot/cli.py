@@ -69,7 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     home_prep = subparsers.add_parser(
         "home-prep",
-        help="Run return_to_farm.home_prep only (stand on home_map; Numpad 0 stops).",
+        help="Run return_to_farm.home_prep only (stand on home_map; F9 stops).",
     )
     home_prep.add_argument(
         "--config", default=DEFAULT_CONFIG_PATH,
@@ -84,7 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "home-prep-dev",
         help=(
             "[DEV] After manual h to home_map, wait then run home_prep once "
-            "(ignores home_prep.enabled; Numpad 0 exits)."
+            "(ignores home_prep.enabled; F9 exits)."
         ),
     )
     home_prep_dev.add_argument(

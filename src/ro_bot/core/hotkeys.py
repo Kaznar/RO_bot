@@ -4,9 +4,8 @@ Global = the keys fire even when the game window owns focus. That's
 what we want — the operator shouldn't have to alt-tab to pause or quit
 the bot.
 
-Keys are intentionally chosen *outside* the RO action bar / movement
-zone (qwerta sdf 1234) so they cannot collide with normal in-game
-input. See `VirtualKey` below.
+Function keys are used so operator controls stay outside the RO action
+bar / movement zone. See `VirtualKey` below.
 """
 
 from __future__ import annotations
@@ -22,8 +21,8 @@ _GetAsyncKeyState.restype = ctypes.c_short
 
 class VirtualKey(IntEnum):
     """Win32 VK_ codes for the hotkeys we actually use."""
-    KEY_0 = 0x30  # quit
-    KEY_P = 0x50  # pause / resume
+    F1 = 0x70  # pause / resume
+    F9 = 0x78  # quit
 
 
 class HotkeyWatcher:

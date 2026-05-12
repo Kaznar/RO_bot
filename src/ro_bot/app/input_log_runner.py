@@ -118,7 +118,7 @@ def run_input_capture_loop(
             ):
                 return 1
         CAP_LOG.info(
-            "INPUT_CAPTURE_BEGIN — svět OK; pokračuj v klikání, Numpad 0 ukončí.",
+            "INPUT_CAPTURE_BEGIN — svět OK; pokračuj v klikání, F9 ukončí.",
         )
         while not should_stop():
             time.sleep(POLL_SEC)

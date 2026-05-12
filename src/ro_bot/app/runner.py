@@ -58,8 +58,8 @@ def run_hunt(
     try:
         run_hunt_loop(
             session.controller,
-            should_stop=lambda: hotkeys.pressed(VirtualKey.KEY_0),
-            toggle_pause=lambda: hotkeys.pressed(VirtualKey.KEY_P),
+            should_stop=lambda: hotkeys.pressed(VirtualKey.F9),
+            toggle_pause=lambda: hotkeys.pressed(VirtualKey.F1),
         )
     finally:
         session.stop()
@@ -69,7 +69,7 @@ def run_hunt(
 def run_home_prep(
     config_path: str | Path,
 ) -> int:
-    """Town prep only (no hunt loop). Numpad 0 stops."""
+    """Town prep only (no hunt loop). F9 stops."""
     path = Path(config_path)
     try:
         profile = load_config(path)
@@ -115,7 +115,7 @@ def run_home_prep(
         return run_home_prep_loop(
             policy,
             session.sniffer,
-            should_stop=lambda: hotkeys.pressed(VirtualKey.KEY_0),
+            should_stop=lambda: hotkeys.pressed(VirtualKey.F9),
         )
     finally:
         session.stop()
@@ -165,7 +165,7 @@ def run_home_prep_dev(
             home_map=home_map,
             active_farm_map=farm,
             policy_factory=lambda: session.make_home_prep_policy(force_enabled=True),
-            should_stop=lambda: hotkeys.pressed(VirtualKey.KEY_0),
+            should_stop=lambda: hotkeys.pressed(VirtualKey.F9),
             settle_after_home_sec=settle_after_home_sec,
             after_prep_arm=(
                 lambda: session.controller.arm_farm_home_route_after_manual_town_prep()
@@ -213,7 +213,7 @@ def run_input_capture(
             session.player_reader,
             window_title_substring=profile.server.window_title,
             char_name=profile.char_name,
-            should_stop=lambda: hotkeys.pressed(VirtualKey.KEY_0),
+            should_stop=lambda: hotkeys.pressed(VirtualKey.F9),
             world_ready_timeout_sec=world_ready_timeout_sec,
             skip_in_world_wait=skip_in_world_wait,
         )

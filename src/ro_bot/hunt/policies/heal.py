@@ -51,11 +51,14 @@ class HealPolicy:
         self._last_heal_at: float = 0.0
         self._last_save_tp_at: float = 0.0
         self._last_snapshot_at: float = 0.0
+        self._save_recovery_deadline: float | None = None
 
     def tick(self, now: float) -> None:
         """One policy iteration. Call every controller tick."""
         self._log_snapshot(now)
         if self._maybe_save_teleport(now):
+            return
+        if self._maybe_finalize_save_recovery(now):
             return
         self._maybe_heal(now)
 
@@ -138,10 +141,63 @@ class HealPolicy:
             )
             return False
         self._last_save_tp_at = now
+        check_sec = self._cfg.save_recovery_check_sec
+        if check_sec > 0:
+            self._save_recovery_deadline = now + check_sec
         hp_max_str = str(hp_max) if hp_max > 0 else "?"
         logger.warning(
             "Save mode: pressed '%s' (HP=%d/%s, trigger<%d, cooldown=%.0fs)",
             SAVE_MODE_KEY, hp, hp_max_str, critical_hp, SAVE_MODE_COOLDOWN_SEC,
+        )
+        if check_sec > 0:
+            logger.info(
+                "Save mode: will check HP vs %d in %.1fs (fallback key=%r)",
+                self._cfg.min_hp, check_sec, self._cfg.save_recovery_key,
+            )
+        return True
+
+    def _maybe_finalize_save_recovery(self, now: float) -> bool:
+        """After save teleport, press fallback key if HP stayed below ``min_hp``."""
+        deadline = self._save_recovery_deadline
+        if deadline is None or now < deadline:
+            return False
+        self._save_recovery_deadline = None
+        if self._cfg.save_recovery_check_sec <= 0:
+            return False
+        if self._cfg.min_hp <= 0:
+            return False
+        if not self._consumables_ok():
+            return False
+        hp, hp_max = self._sniffer.get_player_hp()
+        if hp <= 0:
+            return False
+        hp_max_str = str(hp_max) if hp_max > 0 else "?"
+        if hp >= self._cfg.min_hp:
+            logger.info(
+                "Save mode: HP recovered to %d/%s (>= %d) after save teleport",
+                hp, hp_max_str, self._cfg.min_hp,
+            )
+            return False
+        fallback = (self._cfg.save_recovery_key or "").strip()
+        if not fallback:
+            logger.warning(
+                "Save mode: HP still %d/%s (<%d) after %.1fs but "
+                "save_recovery_key is empty",
+                hp, hp_max_str, self._cfg.min_hp,
+                self._cfg.save_recovery_check_sec,
+            )
+            return False
+        try:
+            self._bridge.press_key(fallback)
+        except Exception:
+            logger.exception(
+                "HID press_key('%s') failed (save recovery)", fallback,
+            )
+            return False
+        logger.warning(
+            "Save mode: pressed '%s' (HP=%d/%s still <%d after %.1fs)",
+            fallback, hp, hp_max_str, self._cfg.min_hp,
+            self._cfg.save_recovery_check_sec,
         )
         return True
 
@@ -161,6 +217,8 @@ class HealPolicy:
             self._last_save_tp_at += delta
         if self._last_snapshot_at:
             self._last_snapshot_at += delta
+        if self._save_recovery_deadline is not None:
+            self._save_recovery_deadline += delta
 
 
 def initial_time() -> float:

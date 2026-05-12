@@ -115,6 +115,10 @@ class ReturnToFarmPolicy:
         """True while we are trying to escape a neighbor map."""
         return self._active is not None
 
+    def is_configured_neighbor(self, map_name: str) -> bool:
+        """True when ``map_name`` is a walk-back neighbor of the active farm."""
+        return self._resolve_transition(map_name) is not None
+
     def disarm(self) -> None:
         """Clear walk-back state (e.g. when home-route navigation owns movement)."""
         self._active = None

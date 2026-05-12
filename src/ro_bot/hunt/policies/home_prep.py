@@ -24,6 +24,15 @@ from ro_bot.hunt.config import HomePrepStep, ReturnToFarmConfig
 
 logger = logging.getLogger("ro_bot.hunt")
 
+# :meth:`HuntController._tick_body` passes ``get_map_name() or "?"``. Treating
+# unknown map like a failed :meth:`_context_ok` would call :meth:`_reset_run`
+# and clear ``_restock_armed`` before the sniffer publishes ``home_map``.
+_UNKNOWN_MAP_FOR_PREP: frozenset[str] = frozenset({"?", ""})
+
+
+def _map_name_unknown_for_prep(map_name: str) -> bool:
+    return map_name in _UNKNOWN_MAP_FOR_PREP
+
 
 class HomePrepPolicy:
     """Blocks farm-home waypoint clicks until configured steps finish."""
@@ -149,14 +158,57 @@ class HomePrepPolicy:
                 pc = (st.x, st.y)
                 if pc == (0, 0):
                     return False
-                self._aim.drag_client_pixels(
-                    step.click_client,
-                    step.drag_to_client,
-                )
+                n_raw = step.click_client_drag_repeat_count
+                n = n_raw if n_raw > 0 else 1
+                gap = max(0.0, step.click_client_drag_repeat_interval_sec)
+                for rep in range(n):
+                    st2 = self._player_reader.read()
+                    pc2 = (st2.x, st2.y)
+                    if pc2 == (0, 0):
+                        return False
+                    settle = step.click_client_drag_settle_before_down_sec
+                    if settle <= 0:
+                        settle = 0.12
+                    drag_kw: dict[str, float | int] = {
+                        "settle_before_down_sec": settle,
+                        "segment_pause_sec": 0.012,
+                    }
+                    if step.click_client_drag_segments > 0:
+                        drag_kw["segments"] = step.click_client_drag_segments
+                    try:
+                        self._aim.drag_client_pixels(
+                            step.click_client,
+                            step.drag_to_client,
+                            **drag_kw,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Home prep: %s step %d/%d client_drag rep %d/%d failed",
+                            tag, idx + 1, total, rep + 1, n,
+                        )
+                        return False
+                    if step.key:
+                        time.sleep(0.22)
+                        if step.hold_modifiers:
+                            self._bridge.press_key_with_modifiers(
+                                step.hold_modifiers,
+                                step.key,
+                            )
+                        else:
+                            self._bridge.press_key(step.key)
+                        logger.debug(
+                            "Home prep: %s step %d/%d key=%r after client_drag "
+                            "rep %d/%d",
+                            tag, idx + 1, total, step.key, rep + 1, n,
+                        )
+                    if rep + 1 < n:
+                        time.sleep(gap)
                 logger.info(
-                    "Home prep: %s step %d/%d drag_client %s → %s player=%s",
+                    "Home prep: %s step %d/%d client_drag %s → %s x%d "
+                    "interval=%.2fs key=%r last_player=%s",
                     tag, idx + 1, total,
-                    step.click_client, step.drag_to_client, pc,
+                    step.click_client, step.drag_to_client, n, gap,
+                    step.key or "", pc2,
                 )
             elif step.click_client is not None:
                 st = self._player_reader.read()
@@ -292,7 +344,8 @@ class HomePrepPolicy:
                     and step.click_cell_drag_to is not None
                     and step.click_cell_drag_repeat_count > 0
                 )
-                if not map_drag_key_done:
+                client_drag_key_done = step.drag_to_client is not None
+                if not map_drag_key_done and not client_drag_key_done:
                     if step.hold_modifiers:
                         self._bridge.press_key_with_modifiers(
                             step.hold_modifiers,
@@ -314,6 +367,7 @@ class HomePrepPolicy:
                 and step.click_cell is None
                 and step.click_client is None
                 and step.drag_to_client is None
+                and step.click_client_drag_repeat_count <= 0
                 and step.modifier_hold_clicks <= 0
                 and step.dismiss_chat_probe_client is None
             ):
@@ -359,6 +413,8 @@ class HomePrepPolicy:
             return
 
         if not self._context_ok(current_map):
+            if _map_name_unknown_for_prep(current_map):
+                return
             self._reset_run()
             return
 
@@ -460,7 +516,9 @@ class HomePrepPolicy:
         farm = (self._rtf.active_farm_map or "").strip()
         if not farm:
             return False
-        return current_map == hr.home_map and current_map != farm
+        cur = current_map.strip()
+        hm = (hr.home_map or "").strip()
+        return cur == hm and cur != farm
 
     def _reset_run(self) -> None:
         self._completed = False
