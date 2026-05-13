@@ -19,17 +19,17 @@
       },
       {
         "anchor": "TR",
-        "inset_x": 120,
+        "inset_x": 0,
         "inset_y": 0,
-        "width": 160,
-        "height": 70
+        "width": 530,
+        "height": 110
       },
       {
         "anchor": "TR",
         "inset_x": 0,
-        "inset_y": 120,
-        "width": 42,
-        "height": 39
+        "inset_y": 80,
+        "width": 400,
+        "height": 180
       },
       {
         "anchor": "BL",
@@ -95,7 +95,9 @@
           "Steam Goblin",
           "Rideword",
           "Petite",
-          "Dragon Tail"
+          "Dragon Tail",
+          "Familiar",
+          "Drainliar"
         ],
         "y_offset_cells": 1.5
       }
@@ -120,7 +122,7 @@
     "heal": {
       "key": "q",
       "cooldown_sec": 0.2,
-      "min_hp": 1500,
+      "min_hp": 2000,
       "save_recovery_check_sec": 5.0,
       "save_recovery_key": "h"
     },
