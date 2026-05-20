@@ -26,11 +26,12 @@ import logging
 import os
 import random
 import time
+from collections.abc import Callable
 
 import serial
 import serial.tools.list_ports
 
-from ro_bot.core.hid.exceptions import RightClickUnavailable
+from ro_bot.core.hid.exceptions import HidTransportError, RightClickUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,8 @@ class ArduinoHidBridge:
         self._baudrate = baudrate
         self._timeout = timeout
         self._serial: serial.Serial | None = None
+        self._transport_lost: bool = False
+        self.on_transport_error: Callable[[Exception], None] | None = None
         #: Pinned two-phase right button, e.g. ``("RD", "RU")``.
         self._rmb_pair: tuple[str, str] | None = None
         #: Pinned one-shot serial line, e.g. ``"C 2"``.
@@ -307,15 +310,34 @@ class ArduinoHidBridge:
             self._serial.close()
             logger.info("Serial connection closed")
         self._serial = None
+        self._transport_lost = False
         self._rmb_pair = None
         self._rmb_oneshot = None
         self._rmb_final_fail = False
 
+    def _fail_transport(self, exc: Exception) -> None:
+        if not self._transport_lost:
+            self._transport_lost = True
+            handler = self.on_transport_error
+            if handler is not None:
+                try:
+                    handler(exc)
+                except Exception:
+                    logger.exception("on_transport_error callback failed")
+        raise HidTransportError(
+            "Arduino HID serial transport lost",
+        ) from exc
+
     def _send(self, command: str) -> str:
         if self._serial is None:
             raise RuntimeError("Arduino not connected")
+        if self._transport_lost:
+            raise HidTransportError("Arduino HID serial transport lost")
         logger.debug("Sent: %s", command)
-        self._serial.write(f"{command}\n".encode())
-        resp = self._serial.readline().decode(errors="replace").strip()
+        try:
+            self._serial.write(f"{command}\n".encode())
+            resp = self._serial.readline().decode(errors="replace").strip()
+        except (serial.SerialException, OSError) as exc:
+            self._fail_transport(exc)
         logger.debug("Recv: %s", resp)
         return resp

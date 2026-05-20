@@ -176,7 +176,7 @@ class HomePrepPolicy:
                     if step.click_client_drag_segments > 0:
                         drag_kw["segments"] = step.click_client_drag_segments
                     try:
-                        self._aim.drag_client_pixels(
+                        ok_drag = self._aim.drag_client_pixels(
                             step.click_client,
                             step.drag_to_client,
                             **drag_kw,
@@ -184,6 +184,13 @@ class HomePrepPolicy:
                     except Exception:
                         logger.exception(
                             "Home prep: %s step %d/%d client_drag rep %d/%d failed",
+                            tag, idx + 1, total, rep + 1, n,
+                        )
+                        return False
+                    if not ok_drag:
+                        logger.warning(
+                            "Home prep: %s step %d/%d client_drag blocked "
+                            "(dead zone) rep %d/%d",
                             tag, idx + 1, total, rep + 1, n,
                         )
                         return False
@@ -215,7 +222,13 @@ class HomePrepPolicy:
                 pc = (st.x, st.y)
                 if pc == (0, 0):
                     return False
-                self._aim.click_client_pixel(step.click_client)
+                if not self._aim.click_client_pixel(step.click_client):
+                    logger.warning(
+                        "Home prep: %s step %d/%d click_client=%s blocked "
+                        "(dead zone)",
+                        tag, idx + 1, total, step.click_client,
+                    )
+                    return False
                 logger.info(
                     "Home prep: %s step %d/%d click_client=%s player=%s",
                     tag, idx + 1, total, step.click_client, pc,
@@ -237,7 +250,7 @@ class HomePrepPolicy:
                         if pc2 == (0, 0):
                             return False
                         try:
-                            self._aim.drag_map_cells(
+                            ok_drag = self._aim.drag_map_cells(
                                 pc2,
                                 step.click_cell,
                                 step.click_cell_drag_to,
@@ -248,6 +261,13 @@ class HomePrepPolicy:
                             logger.exception(
                                 "Home prep: %s step %d/%d map_drag rep %d/%d "
                                 "failed — aborting step (no key)",
+                                tag, idx + 1, total, rep + 1, n,
+                            )
+                            return False
+                        if not ok_drag:
+                            logger.warning(
+                                "Home prep: %s step %d/%d map_drag blocked "
+                                "(dead zone) rep %d/%d",
                                 tag, idx + 1, total, rep + 1, n,
                             )
                             return False
@@ -275,11 +295,20 @@ class HomePrepPolicy:
                         step.key or "", pc2,
                     )
                 else:
-                    self._aim.aim_and_click(
+                    self._aim.shake_mouse(moves=5, max_delta=10)
+                    ok = self._aim.aim_and_click(
                         pc,
                         step.click_cell,
-                        aim_settle_sec=0.08,
+                        aim_settle_sec=0.12,
+                        post_move_sleep_sec=0.08,
                     )
+                    if not ok:
+                        logger.warning(
+                            "Home prep: %s step %d/%d click_cell=%s FAILED "
+                            "(aim_and_click refused — will retry)",
+                            tag, idx + 1, total, step.click_cell,
+                        )
+                        return False
                     logger.info(
                         "Home prep: %s step %d/%d click_cell=%s player=%s",
                         tag, idx + 1, total, step.click_cell, pc,
@@ -315,13 +344,19 @@ class HomePrepPolicy:
                 n = step.modifier_hold_clicks
                 gap = max(0.0, step.modifier_hold_click_interval_sec)
                 click_fn = (
-                    self._bridge.mouse_right_click
+                    self._aim.click_right
                     if btn == "right"
-                    else self._bridge.mouse_click
+                    else self._aim.click
                 )
                 try:
                     for i in range(n):
-                        click_fn()
+                        if not click_fn():
+                            logger.warning(
+                                "Home prep: %s step %d/%d modifier_hold "
+                                "click blocked (dead zone) %d/%d",
+                                tag, idx + 1, total, i + 1, n,
+                            )
+                            return False
                         if i + 1 < n:
                             time.sleep(gap)
                             # Some HID firmware clears keyboard modifiers on mouse

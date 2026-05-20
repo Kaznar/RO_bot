@@ -172,7 +172,7 @@ class HuntController:
             else None
         )
         self._farm_home_route = self._make_farm_home_route_policy(
-            cfg, aim, player_reader,
+            cfg, aim, player_reader, bridge,
         )
         self._home_prep = HuntController.make_home_prep_policy(
             cfg, bridge, player_reader, aim, game_hwnd=self._game_hwnd,
@@ -215,6 +215,7 @@ class HuntController:
         cfg: HuntConfig,
         aim: AimService,
         player_reader: PlayerReader,
+        bridge: HidBridge,
     ) -> FarmHomeRoutePolicy | None:
         rtf = cfg.return_to_farm
         if rtf is None or rtf.home_route is None:
@@ -223,7 +224,7 @@ class HuntController:
         farm = (rtf.active_farm_map or "").strip()
         if not hr.enabled or len(hr.waypoints) < 2 or not farm:
             return None
-        return FarmHomeRoutePolicy(rtf, aim, player_reader)
+        return FarmHomeRoutePolicy(rtf, aim, player_reader, bridge)
 
     @staticmethod
     def make_home_prep_policy(
@@ -550,8 +551,14 @@ class HuntController:
         self._stall_guard.reset(time.monotonic())
         if self._death_return is not None:
             self._death_return.on_map_reset()
+        from_map: str | None = None
+        for old_map, new_map in pairs:
+            if new_map == map_name:
+                from_map = old_map
         if self._farm_home_route is not None:
-            self._farm_home_route.on_map_change(map_name, time.monotonic())
+            self._farm_home_route.on_map_change(
+                map_name, time.monotonic(), from_map=from_map,
+            )
         if self._return_to_farm is not None:
             if (
                 self._farm_home_route is not None
@@ -573,6 +580,7 @@ class HuntController:
         self._dead_zone_filter = dataclasses.replace(
             self._dead_zone_filter, rect=rect,
         )
+        self._aim.set_dead_zone_filter(self._dead_zone_filter)
 
     def arm_farm_home_route_after_manual_town_prep(self) -> None:
         """Standalone ``home-prep``: same arming as a 0091 town entry (no sniffer pair)."""
@@ -613,6 +621,21 @@ class HuntController:
                 if self._farm_home_route is not None:
                     self._farm_home_route.arm_from_town_arrival()
 
+    def _should_skip_warp_escape_idle_tp(self, map_name: str) -> bool:
+        """True when ``home_route`` waypoints already cover this map.
+
+        Returning from ``manual_control_maps`` (e.g. Comodo) onto a transit
+        dungeon that is part of the scripted walk (``beach_dun3``) must not
+        fire ``idle_action`` — it breaks :class:`FarmHomeRoutePolicy` clicks.
+        """
+        rtf = self._cfg.return_to_farm
+        if rtf is None:
+            return False
+        hr = rtf.home_route
+        if hr is None or not hr.enabled:
+            return False
+        return any(wp.map_name == map_name for wp in hr.waypoints)
+
     def _apply_warp_return_transition(
         self,
         old_map: str | None,
@@ -630,17 +653,24 @@ class HuntController:
             and old_map != "?"
             and old_map != new_map
         ):
-            self._pending_warp_return_idle_tp = True
-            self._pending_warp_return_idle_reason = (
-                "return from manual-control map — warp escape"
-            )
             self._warp_return_tp_pending = False
             self._warp_return_tp_target = None
-            logger.info(
-                "Map change %s → %s: queued idle teleport before hunt "
-                "(return from manual-control map)",
-                old_map, new_map,
-            )
+            if self._should_skip_warp_escape_idle_tp(new_map):
+                logger.info(
+                    "Map change %s → %s: skip idle teleport "
+                    "(home_route covers '%s'; no warp escape)",
+                    old_map, new_map, new_map,
+                )
+            else:
+                self._pending_warp_return_idle_tp = True
+                self._pending_warp_return_idle_reason = (
+                    "return from manual-control map — warp escape"
+                )
+                logger.info(
+                    "Map change %s → %s: queued idle teleport before hunt "
+                    "(return from manual-control map)",
+                    old_map, new_map,
+                )
 
         if (
             old_map is not None

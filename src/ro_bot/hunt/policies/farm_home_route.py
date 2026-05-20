@@ -9,12 +9,19 @@ When ``finish_on_active_farm_map`` is True (default), arriving on the farm
 map with only farm-map waypoints left completes the route without walking to
 the last anchor cell.
 
-Portable across PCs: targets are RO cell coordinates, not screen pixels.
+Portable across PCs: targets are RO map cells, not screen pixels.
+
+On ``beach_dun3`` the scripted leg uses :mod:`beach_dun3_transit`: random
+teleport ``t`` until the east corridor, then short ground clicks toward the
+warp column (see that module for bounds).
 
 Stall handling uses **memory cell** idle time (not ``last_click_at``), so
-``click_cooldown_sec=0`` still detects standing still. When the client lies
-about walkability, small :meth:`AimService.shake_mouse` jitter runs before
-repeat clicks and before stuck recovery.
+``click_cooldown_sec=0`` still detects standing still. Before each waypoint
+click we ``shake_mouse`` and pass a short ``post_move_sleep_sec`` so the client
+accepts LMB after ``MM``.
+
+When the client lies about walkability, the same jitter runs again during
+stuck recovery (plus a one-cell nudge click).
 
 After each map warp (0091) and when the route first arms, ground clicks wait
 ``post_map_change_grace_sec`` so the client can finish loading — no thread sleep.
@@ -25,15 +32,16 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ro_bot.core.hid.bridge import HidBridge
 from ro_bot.core.memory.player_state import PlayerReader
 from ro_bot.hunt.aim_service import AimService
 from ro_bot.hunt.config import ReturnToFarmConfig
+from ro_bot.hunt.routes.segments import beach_dun3_transit
 
 logger = logging.getLogger("ro_bot.hunt")
 
-# Fraction of ``stuck_no_move_timeout_sec``: after this idle time, nudge the
-# mouse before normal waypoint clicks (cheap client unblock).
-_IDLE_SHAKE_FRACTION = 0.45
+# Extra sleep after aim-settle and before LMB on waypoint clicks (HID pacing).
+_WAYPOINT_POST_MOVE_SEC = 0.06
 
 
 @dataclass
@@ -46,6 +54,8 @@ class _RouteState:
     last_recovery_at: float | None = None
     #: Monotonic deadline; no aim_and_click until ``now`` passes this.
     suppress_clicks_until: float | None = None
+    #: Last random teleport on ``beach_dun3`` while outside the east corridor.
+    last_beach_teleport_at: float | None = None
 
 
 class FarmHomeRoutePolicy:
@@ -56,6 +66,7 @@ class FarmHomeRoutePolicy:
         cfg: ReturnToFarmConfig,
         aim: AimService,
         player_reader: PlayerReader,
+        bridge: HidBridge,
     ) -> None:
         hr = cfg.home_route
         if hr is None:
@@ -64,6 +75,7 @@ class FarmHomeRoutePolicy:
         self._hr = hr
         self._aim = aim
         self._player_reader = player_reader
+        self._bridge = bridge
         self._state: _RouteState | None = None
         #: Set by the controller on the same 0091 edge as ``home_prep`` restock
         #: (enter ``home_map`` from a non-home map). Until then, do not arm the
@@ -106,7 +118,13 @@ class FarmHomeRoutePolicy:
             return True
         return map_name == self._hr.home_map and self._navigation_armed
 
-    def on_map_change(self, map_name: str, now: float) -> None:
+    def on_map_change(
+        self,
+        map_name: str,
+        now: float,
+        *,
+        from_map: str | None = None,
+    ) -> None:
         """Resync waypoint index after a warp (0091)."""
         if not self.enabled() or self._state is None:
             return
@@ -116,6 +134,13 @@ class FarmHomeRoutePolicy:
             st.last_seen_player_cell = None
             st.player_cell_changed_at = now
             st.last_recovery_at = None
+            if beach_dun3_transit.is_wing_reposition_on_map(from_map, map_name):
+                # Wing on beach_dun3 fires 0091 same→same; keep 0.4s ``t`` cadence.
+                st.suppress_clicks_until = None
+                logger.debug(
+                    "Farm home route: beach_dun3 wing reposition — no post-map grace",
+                )
+                return
             grace = max(0.0, self._hr.post_map_change_grace_sec)
             if grace > 0:
                 st.suppress_clicks_until = now + grace
@@ -186,6 +211,19 @@ class FarmHomeRoutePolicy:
             st.stuck_attempts = 0
             st.last_recovery_at = None
 
+        grace = max(0.0, self._hr.post_map_change_grace_sec)
+        if st.suppress_clicks_until is not None and now >= st.suppress_clicks_until:
+            st.suppress_clicks_until = None
+        nav_suppressed = suppress_navigation or (
+            grace > 0
+            and st.suppress_clicks_until is not None
+            and now < st.suppress_clicks_until
+        )
+
+        if wp.map_name == "beach_dun3":
+            self._tick_beach_dun3_transit(now, pc, st, wps, idx, nav_suppressed)
+            return
+
         if self._within_arrival(pc, (wp.x, wp.y)):
             st.index += 1
             st.last_seen_player_cell = pc
@@ -200,15 +238,6 @@ class FarmHomeRoutePolicy:
                 logger.info("Farm home route: completed")
                 self._disarm()
             return
-
-        grace = max(0.0, self._hr.post_map_change_grace_sec)
-        if st.suppress_clicks_until is not None and now >= st.suppress_clicks_until:
-            st.suppress_clicks_until = None
-        nav_suppressed = suppress_navigation or (
-            grace > 0
-            and st.suppress_clicks_until is not None
-            and now < st.suppress_clicks_until
-        )
 
         stuck_after = max(0.05, self._hr.stuck_no_move_timeout_sec)
         idle_sec = now - st.player_cell_changed_at
@@ -234,7 +263,11 @@ class FarmHomeRoutePolicy:
             step_cell = self._recovery_step_cell(pc, (wp.x, wp.y), st.stuck_attempts)
             try:
                 self._aim.shake_mouse()
-                self._aim.aim_and_click(pc, step_cell, aim_settle_sec=0.0)
+                self._aim.aim_and_click(
+                    pc,
+                    step_cell,
+                    post_move_sleep_sec=_WAYPOINT_POST_MOVE_SEC,
+                )
             except Exception:
                 logger.exception("Farm home route: stuck recovery aim_and_click failed")
                 return
@@ -255,11 +288,13 @@ class FarmHomeRoutePolicy:
         if last is not None and now - last < self._hr.click_cooldown_sec:
             return
 
-        idle_shake_after = max(0.05, _IDLE_SHAKE_FRACTION * stuck_after)
         try:
-            if idle_sec >= idle_shake_after:
-                self._aim.shake_mouse()
-            self._aim.aim_and_click(pc, (wp.x, wp.y), aim_settle_sec=0.0)
+            self._aim.shake_mouse()
+            self._aim.aim_and_click(
+                pc,
+                (wp.x, wp.y),
+                post_move_sleep_sec=_WAYPOINT_POST_MOVE_SEC,
+            )
         except Exception:
             logger.exception("Farm home route: aim_and_click failed")
             return
@@ -268,6 +303,138 @@ class FarmHomeRoutePolicy:
             "Farm home route: click toward wp %d/%d '%s' target=(%d,%d) "
             "player=(%d,%d)",
             idx + 1, len(wps), wp.map_name, wp.x, wp.y, pc[0], pc[1],
+        )
+
+    def _tick_beach_dun3_transit(
+        self,
+        now: float,
+        pc: tuple[int, int],
+        st: _RouteState,
+        wps: tuple,
+        idx: int,
+        nav_suppressed: bool,
+    ) -> None:
+        """Random ``t`` until corridor, then short clicks toward east exit."""
+        px, py = pc
+        if beach_dun3_transit.at_exit_zone(px, py):
+            nxt = beach_dun3_transit.first_waypoint_index_after_map(
+                wps, idx, "beach_dun3",
+            )
+            if nxt is None:
+                logger.warning(
+                    "Farm home route: beach_dun3 at exit but no following waypoint",
+                )
+                self._disarm()
+                return
+            st.index = nxt
+            st.stuck_attempts = 0
+            st.last_recovery_at = None
+            st.last_beach_teleport_at = None
+            ex, ey = beach_dun3_transit.exit_cell()
+            logger.info(
+                "Farm home route: beach_dun3 near exit (%d,%d) → waypoint index %d",
+                ex, ey, nxt,
+            )
+            return
+
+        if not beach_dun3_transit.in_corridor(px, py):
+            if nav_suppressed:
+                return
+            cold = beach_dun3_transit.teleport_cooldown_sec()
+            last_tp = st.last_beach_teleport_at
+            if last_tp is None or now - last_tp >= cold:
+                try:
+                    self._bridge.press_key(beach_dun3_transit.teleport_key())
+                except Exception:
+                    logger.exception(
+                        "Farm home route: beach_dun3 teleport key failed",
+                    )
+                    return
+                st.last_beach_teleport_at = now
+                logger.info(
+                    "Farm home route: beach_dun3 player=(%d,%d) outside corridor "
+                    "%r; pressed %r",
+                    px,
+                    py,
+                    beach_dun3_transit.corridor_bounds(),
+                    beach_dun3_transit.teleport_key(),
+                )
+            return
+
+        stuck_after = max(0.05, self._hr.stuck_no_move_timeout_sec)
+        idle_sec = now - st.player_cell_changed_at
+        recovery_cooldown_ok = (
+            st.last_recovery_at is None
+            or now - st.last_recovery_at >= stuck_after
+        )
+        goal_cell = beach_dun3_transit.next_walk_cell(px, py)
+        if (
+            not nav_suppressed
+            and idle_sec >= stuck_after
+            and recovery_cooldown_ok
+        ):
+            if st.stuck_attempts >= self._hr.stuck_max_attempts_per_waypoint:
+                logger.warning(
+                    "Farm home route: beach_dun3 no progress → disarming",
+                )
+                self._disarm()
+                return
+            st.stuck_attempts += 1
+            step_cell = self._recovery_step_cell(
+                pc, goal_cell, st.stuck_attempts,
+            )
+            try:
+                self._aim.shake_mouse()
+                self._aim.aim_and_click(
+                    pc,
+                    step_cell,
+                    post_move_sleep_sec=_WAYPOINT_POST_MOVE_SEC,
+                )
+            except Exception:
+                logger.exception(
+                    "Farm home route: beach_dun3 stuck recovery failed",
+                )
+                return
+            st.last_click_at = now
+            st.last_recovery_at = now
+            logger.info(
+                "Farm home route: beach_dun3 stuck recovery #%d step=(%d,%d) "
+                "goal=(%d,%d) player=(%d,%d)",
+                st.stuck_attempts,
+                step_cell[0],
+                step_cell[1],
+                goal_cell[0],
+                goal_cell[1],
+                px,
+                py,
+            )
+            return
+
+        if nav_suppressed:
+            return
+
+        last = st.last_click_at
+        if last is not None and now - last < self._hr.click_cooldown_sec:
+            return
+
+        try:
+            self._aim.shake_mouse()
+            self._aim.aim_and_click(
+                pc,
+                goal_cell,
+                post_move_sleep_sec=_WAYPOINT_POST_MOVE_SEC,
+            )
+        except Exception:
+            logger.exception("Farm home route: beach_dun3 walk click failed")
+            return
+        st.last_click_at = now
+        gx, gy = goal_cell
+        logger.info(
+            "Farm home route: beach_dun3 walk toward=(%d,%d) player=(%d,%d)",
+            gx,
+            gy,
+            px,
+            py,
         )
 
     @staticmethod
@@ -305,6 +472,8 @@ class FarmHomeRoutePolicy:
             st.last_recovery_at += delta
         if st.suppress_clicks_until is not None:
             st.suppress_clicks_until += delta
+        if st.last_beach_teleport_at is not None:
+            st.last_beach_teleport_at += delta
 
     def _within_arrival(
         self,

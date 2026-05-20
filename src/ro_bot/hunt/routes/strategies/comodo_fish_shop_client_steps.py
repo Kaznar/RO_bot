@@ -26,19 +26,19 @@ def comodo_fish_shop_client_steps() -> tuple[HomePrepStep, ...]:
     """Dialog → buy → select fish → drag to buy slot → qty → confirm."""
     return (
         HomePrepStep(
-            click_client=_FISH_SHOP_DIALOG_CLIENT,
+            click_cell=(225, 164),
             key="",
-            delay_after_sec=0.55,
+            delay_after_sec=1.0,
         ),
         HomePrepStep(
             click_client=_FISH_SHOP_BUY_BUTTON_CLIENT,
             key="",
-            delay_after_sec=0.75,
+            delay_after_sec=1.0,
         ),
         HomePrepStep(
             click_client=_FISH_SHOP_FRESH_FISH_CLIENT,
             key="",
-            delay_after_sec=0.55,
+            delay_after_sec=1.0,
         ),
         HomePrepStep(
             click_client=_FISH_SHOP_FRESH_FISH_CLIENT,
@@ -46,11 +46,11 @@ def comodo_fish_shop_client_steps() -> tuple[HomePrepStep, ...]:
             click_client_drag_settle_before_down_sec=0.22,
             click_client_drag_segments=22,
             key="",
-            delay_after_sec=0.45,
+            delay_after_sec=1.0,
         ),
-        HomePrepStep(key="1", delay_after_sec=0.12),
-        HomePrepStep(key="0", delay_after_sec=0.12),
-        HomePrepStep(key="0", delay_after_sec=0.12),
+        HomePrepStep(key="1", delay_after_sec=0.5),
+        #HomePrepStep(key="0", delay_after_sec=0.12),
+        HomePrepStep(key="0", delay_after_sec=0.5),
         HomePrepStep(key="enter", delay_after_sec=0.55),
         HomePrepStep(
             click_client=_FISH_SHOP_BUY_CONFIRM_CLIENT,

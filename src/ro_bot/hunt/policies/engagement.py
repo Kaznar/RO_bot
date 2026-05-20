@@ -97,7 +97,19 @@ class EngagementMachine:
     ) -> None:
         """Start attacking ``candidate``: aim, settle, click."""
         cell = (candidate.x, candidate.y)
+        if self._dead_zones.contains(player_cell, cell):
+            logger.info(
+                "Engage blocked (dead zone): gid=%d name='%s' cell=%s",
+                candidate.gid,
+                candidate.name,
+                cell,
+            )
+            return
         dist = abs(cell[0] - player_cell[0]) + abs(cell[1] - player_cell[1])
+        if not self._aim.aim_and_click(
+            player_cell, cell, target_name=candidate.name,
+        ):
+            return
         self.state.gid = candidate.gid
         self.state.name = candidate.name
         self.state.engaged_at = now
@@ -106,10 +118,6 @@ class EngagementMachine:
         self.state.engage_dist = dist
         self.state.approach_anchor_cell = player_cell
         self.state.approach_stationary_since = now
-
-        self._aim.aim_and_click(
-            player_cell, cell, target_name=candidate.name,
-        )
 
         logger.info(
             "Engage: gid=%d name='%s' map=(%d,%d) player=(%d,%d) dist=%d",
@@ -135,7 +143,7 @@ class EngagementMachine:
         if now - self._aim.last_click_at < self._reaim_cooldown_sec:
             return
         if self._dead_zones.contains(player_cell, settled):
-            logger.debug(
+            logger.info(
                 "Re-aim suppressed (dead zone): gid=%d settled=%s",
                 self.state.gid, settled,
             )
@@ -151,10 +159,10 @@ class EngagementMachine:
                 "Re-aim: gid=%d %s→%s",
                 self.state.gid, self.state.last_aim_cell, settled,
             )
-        self._aim.aim_and_click(
+        if self._aim.aim_and_click(
             player_cell, settled, target_name=self.state.name,
-        )
-        self.state.last_aim_cell = settled
+        ):
+            self.state.last_aim_cell = settled
 
     def shift(self, delta: float) -> None:
         """Pause/resume support."""

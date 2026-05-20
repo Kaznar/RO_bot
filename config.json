@@ -14,29 +14,36 @@
         "anchor": "TL",
         "inset_x": 0,
         "inset_y": 0,
-        "width": 220,
-        "height": 70
+        "width": 238,
+        "height": 86
       },
       {
-        "anchor": "TR",
+        "anchor": "TL",
+        "inset_x": 1269,
+        "inset_y": 3,
+        "width": 221,
+        "height": 91
+      },
+      {
+        "anchor": "TL",
+        "inset_x": 1531,
+        "inset_y": 120,
+        "width": 67,
+        "height": 55
+      },
+      {
+        "anchor": "TL",
         "inset_x": 0,
-        "inset_y": 0,
-        "width": 530,
-        "height": 110
+        "inset_y": 786,
+        "width": 191,
+        "height": 61
       },
       {
-        "anchor": "TR",
-        "inset_x": 0,
-        "inset_y": 80,
-        "width": 400,
-        "height": 180
-      },
-      {
-        "anchor": "BL",
-        "inset_x": 566,
-        "inset_y": 91,
-        "width": 42,
-        "height": 39
+        "anchor": "TL",
+        "inset_x": 518,
+        "inset_y": 778,
+        "width": 102,
+        "height": 66
       }
     ]
   },
@@ -74,7 +81,12 @@
         "Kobold",
         "Parasite",
         "Dragon Tail",
-        "Geographer"
+        "Geographer",
+        "Flora",
+        "Mantis",
+        "Petite",
+        "Blue Plant",
+        "Shining Plant"
       ],
       "dangerous": [
         "Hunter Fly",
@@ -94,7 +106,6 @@
           "Goblin Steamrider",
           "Steam Goblin",
           "Rideword",
-          "Petite",
           "Dragon Tail",
           "Familiar",
           "Drainliar"
@@ -122,7 +133,7 @@
     "heal": {
       "key": "q",
       "cooldown_sec": 0.2,
-      "min_hp": 2000,
+      "min_hp": 500,
       "save_recovery_check_sec": 5.0,
       "save_recovery_key": "h"
     },
@@ -162,13 +173,19 @@
       }
     ],
     "return_to_farm": {
-      "home_navigation_enabled": false,
+      "home_navigation_enabled": true,
       "walk_cells": 3,
       "settle_sec": 1.5,
       "retry_sec": 5.0,
       "max_retries": 4,
-      "active_farm_map": "cmd_fild01",
+      "active_farm_map": "mjolnir_02",
       "maps": {
+        "mjolnir_02": {
+          "mjo_dun01": "down",
+          "mjolnir_01": "right",
+          "mjolnir_03": "left",
+          "mjolnir_06": "up"
+        },
         "um_fild03": {
           "um_fild02": "right",
           "cmd_fild01": "up"

@@ -1,11 +1,4 @@
-"""Comodo town ``home_prep`` — Kafra + inventory/storage (client pixels).
-
-Deposit / withdraw / fish shop HUD use ``click_client`` modules; walk to the
-vendor uses ``click_cell``. See :mod:`comodo_inv_client_steps` and
-:mod:`comodo_fish_shop_client_steps`.
-
-Heal/buffer omitted.
-"""
+"""Comodo town ``home_prep`` — Kafra + inventory/storage (client pixels)."""
 
 from __future__ import annotations
 
@@ -13,19 +6,14 @@ from ro_bot.hunt.config import HomePrepConfig, HomePrepStep
 from ro_bot.hunt.routes.strategies.comodo_fish_shop_client_steps import (
     comodo_fish_shop_client_steps,
 )
-from ro_bot.hunt.routes.strategies.comodo_inv_client_steps import (
-    comodo_inv_storage_client_steps,
-    comodo_inv_withdraw_storage_potions_client_steps,
-)
-
-_KAFRA_CELL = (195, 150)
-
+from ro_bot.hunt.routes.town import Kafra, deposit_to_storage_steps, withdraw_from_storage_slots
 
 _SETTLE_AFTER_HOME_WARP_SEC = 3.0
 _DELAY_AFTER_STAND_BEFORE_KAFRA_SEC = 3.92
 
-# Client pixel inside the white chat input when open (from input-capture).
-_COMODO_SPACE_AFTER_INV_PROBE: tuple[int, int] | None = (42, 889)
+_COMODO_SPACE_AFTER_INV_PROBE: tuple[int, int] | None = (176, 887)
+
+_KAFRA = Kafra((195, 150))
 
 
 def home_prep_comodo() -> HomePrepConfig:
@@ -39,32 +27,28 @@ def home_prep_comodo() -> HomePrepConfig:
                 key="",
                 delay_after_sec=_SETTLE_AFTER_HOME_WARP_SEC,
             ),
-            HomePrepStep(key="space", delay_after_sec=0.55),
+            HomePrepStep(key="space", delay_after_sec=1.0),
             HomePrepStep(
                 key="",
                 delay_after_sec=_DELAY_AFTER_STAND_BEFORE_KAFRA_SEC,
             ),
-            HomePrepStep(click_cell=_KAFRA_CELL, key="", delay_after_sec=1.43),
-            HomePrepStep(key="enter", delay_after_sec=0.55),
-            HomePrepStep(key="down", delay_after_sec=0.43),
-            HomePrepStep(key="enter", delay_after_sec=0.48),
-            HomePrepStep(key="enter", delay_after_sec=1.0),
+            *_KAFRA.open_storage_menu_steps(),
             HomePrepStep(
                 key="e",
                 hold_modifiers=("alt",),
                 delay_after_sec=1.5,
             ),
-            *comodo_inv_storage_client_steps(),
-            *comodo_inv_withdraw_storage_potions_client_steps(),
+            *deposit_to_storage_steps(),
+            *withdraw_from_storage_slots(),
             HomePrepStep(
                 key="space",
                 dismiss_chat_probe_client=_COMODO_SPACE_AFTER_INV_PROBE,
                 dismiss_chat_min_channel=228,
                 dismiss_chat_key="esc",
-                delay_after_sec=0.55,
+                delay_after_sec=1.0,
             ),
             HomePrepStep(
-                click_cell=(217, 152),
+                click_cell=(214, 152),
                 key="",
                 delay_after_sec=5.0,
             ),
@@ -72,10 +56,10 @@ def home_prep_comodo() -> HomePrepConfig:
             HomePrepStep(
                 click_cell=(200, 150),
                 key="enter",
-                delay_after_sec=1.0,
+                delay_after_sec=2.0,
             ),
-            HomePrepStep(key="enter", delay_after_sec=0.55),
-            HomePrepStep(key="enter", delay_after_sec=0.55),
+            HomePrepStep(key="enter", delay_after_sec=2.0),
+            HomePrepStep(key="enter", delay_after_sec=2.0),
         ),
         post_steps=(),
     )

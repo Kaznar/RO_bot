@@ -30,6 +30,7 @@ from ro_bot.core.window import (
     MouseAcceleration,
     WindowRect,
     get_client_rect,
+    request_close_game_window,
     wait_for_game_window,
 )
 from ro_bot.hunt.aim_service import AimService
@@ -206,8 +207,19 @@ class BotSession:
         self._rect = None
         self._hwnd = None
 
+    def _on_hid_transport_error(self, exc: Exception) -> None:
+        logger.error(
+            "HID transport lost (%s) — closing game window and pausing hunt",
+            exc,
+        )
+        if self._hwnd is not None:
+            request_close_game_window(self._hwnd)
+        if self._controller is not None:
+            self._controller.pause()
+
     def _start_bridge(self, rect: WindowRect) -> HidBridge:
         bridge = ArduinoHidBridge()
+        bridge.on_transport_error = self._on_hid_transport_error
         bridge.connect()
         self._stack.callback(bridge.disconnect)
         # Screen dims: use the virtual screen covered by the client area.
@@ -243,17 +255,18 @@ class BotSession:
         tracker: EntityTracker,
     ) -> HuntController:
         cfg = self._build_hunt_config()
+        dead_zone_filter = DeadZoneFilter(
+            zones=cfg.dead_zones,
+            projection=self._profile.server.projection,
+            rect=rect,
+        )
         aim = AimService(
             bridge=bridge,
             projection=self._profile.server.projection,
             rect=rect,
             aim_settle_sec=cfg.engagement.aim_settle_sec,
             aim_offsets=cfg.aim_offsets,
-        )
-        dead_zone_filter = DeadZoneFilter(
-            zones=cfg.dead_zones,
-            projection=self._profile.server.projection,
-            rect=rect,
+            dead_zone_filter=dead_zone_filter,
         )
         return HuntController(
             cfg=cfg,
@@ -268,14 +281,20 @@ class BotSession:
 
     def _build_hunt_config(self) -> HuntConfig:
         p = self._profile
+        allowed = (
+            self._selected_mobs
+            if self._selected_mobs is not None
+            else p.allowed_mobs
+        )
+        # ``--mobs`` targets must not also trigger escape (e.g. High Orc in
+        # profile.mobs.dangerous but passed on CLI for this farm run).
+        dangerous = p.dangerous_mobs
+        if self._selected_mobs is not None:
+            dangerous = dangerous - allowed
         cfg = HuntConfig(
             char_name=p.char_name,
-            allowed_names=(
-                self._selected_mobs
-                if self._selected_mobs is not None
-                else p.allowed_mobs
-            ),
-            dangerous_names=p.dangerous_mobs,
+            allowed_names=allowed,
+            dangerous_names=dangerous,
             manual_control_maps=p.manual_control_maps,
             dead_zones=p.server.dead_zones,
             aim_offsets=p.aim_offsets,

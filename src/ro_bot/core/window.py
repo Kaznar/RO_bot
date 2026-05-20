@@ -89,6 +89,24 @@ def wait_for_game_window(
             time.sleep(poll_sec)
 
 
+def request_close_game_window(hwnd: int) -> bool:
+    """Post ``WM_CLOSE`` so the game client can shut down gracefully.
+
+    Returns ``False`` when ``hwnd`` is missing or no longer a valid window.
+    """
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        logger.warning(
+            "request_close_game_window: invalid hwnd=0x%X", hwnd or 0,
+        )
+        return False
+    title = win32gui.GetWindowText(hwnd)
+    win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+    logger.warning(
+        "Requested close for game window '%s' (hwnd=0x%X)", title, hwnd,
+    )
+    return True
+
+
 def get_client_rect(hwnd: int) -> WindowRect:
     """Return the client area rectangle in screen coordinates."""
     left, top, right, bottom = win32gui.GetClientRect(hwnd)
