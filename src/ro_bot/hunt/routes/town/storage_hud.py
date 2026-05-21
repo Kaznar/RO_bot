@@ -48,15 +48,15 @@ class StorageWithdrawGrid:
 # Row index 1 col 0 capture: client=(329, 94) (2026-05-15). First row = one pitch up.
 _DEFAULT_GRID = StorageWithdrawGrid(
     col_xs=(335, 335),
-    row0_y=64,
-    row_pitch_px=35,
+    row0_y=62,
+    row_pitch_px=32,
 )
 
 # Default home-prep withdraw profile (**all towns** share this HUD).
 # Change rows/columns/qty keys here only — not per-city modules.
 DEFAULT_HOME_PREP_WITHDRAW_SLOTS: tuple[tuple[int, int, tuple[str, ...]], ...] = (
-    (5, 0, ("3", "enter")),
-    (9, 1, ("1", "enter")),
+    (5, 0, ("1", "0", "enter")),
+    (8, 1, ("1", "enter")),
 )
 
 

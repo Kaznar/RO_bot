@@ -78,6 +78,10 @@ DEFAULTS: dict[str, Any] = {
             "ks_guard_min_dist": 0,
             "ks_guard_min_hp_deficit": 1,
             "ks_guard_blacklist_sec": 8.0,
+            "player_closer_margin": 0,
+            "player_closer_max_mob_dist": 40,
+            "player_closer_max_player_mob_dist": 25,
+            "player_closer_blacklist_sec": 8.0,
             "abandon_target_key": "",
         },
         "heal": {

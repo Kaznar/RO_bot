@@ -71,6 +71,7 @@ def collect_candidates(
     ks_guard_min_dist: int = 0,
     ks_guard_min_hp_deficit: int = 1,
     get_entity_hp: Callable[[int], tuple[int, int] | None] | None = None,
+    mob_blocked_by_closer_player: Callable[[tuple[int, int]], bool] | None = None,
 ) -> CandidateResult:
     """Filter ``visible`` into clickable candidates.
 
@@ -81,6 +82,7 @@ def collect_candidates(
       4. cell has been settled for ``target_settle_sec``
       5. settled cell doesn't project onto any dead zone
       6. optional KS guard — distant mobs that already lost HP
+      7. optional player-closer guard — another player nearer the mob
 
     The ``blocked_by_dead_zone`` counter tells the caller whether "no
     candidates" means *nothing visible* (fire idle action) vs. *mob
@@ -114,6 +116,9 @@ def collect_candidates(
                     min_hp_deficit=ks_guard_min_hp_deficit,
                 ):
                     continue
+        if mob_blocked_by_closer_player is not None:
+            if mob_blocked_by_closer_player(settled):
+                continue
         candidates.append(Candidate(gid=gid, name=name, x=settled[0], y=settled[1]))
     return CandidateResult(
         candidates=candidates, blocked_by_dead_zone=blocked,

@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ro_bot.hunt.config import FarmHomeRouteConfig, FarmRouteWaypoint, HomePrepConfig
+from ro_bot.hunt.config import (
+    FarmHomeRouteConfig,
+    FarmRouteWaypoint,
+    HomePrepConfig,
+    HomePrepStep,
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +30,8 @@ class FarmReturnPlan:
     stuck_max_attempts_per_waypoint: int = 24
     post_map_change_grace_sec: float = 3.0
     home_prep: HomePrepConfig | None = None
+    #: Keys pressed on ``active_farm_map`` after the click path completes.
+    farm_arrival_steps: tuple[HomePrepStep, ...] = ()
 
     def __post_init__(self) -> None:
         hm = self.home_map.strip()

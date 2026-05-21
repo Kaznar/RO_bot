@@ -36,6 +36,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
+from collections.abc import Callable
 
 from ro_bot.core.hid.bridge import HidBridge
 from ro_bot.core.memory.player_state import PlayerReader, PlayerState
@@ -71,8 +72,10 @@ from ro_bot.hunt.policies.automation_stall import (
     recover_automation_stall,
 )
 from ro_bot.hunt.policies.path_stuck import PathStuckPolicy
+from ro_bot.hunt.policies.player_closer import PlayerCloserPolicy
 from ro_bot.hunt.policies.remote_contested import RemoteContestedPolicy
 from ro_bot.hunt.policies.farm_home_route import FarmHomeRoutePolicy
+from ro_bot.hunt.policies.farm_arrival import FarmArrivalPolicy
 from ro_bot.hunt.policies.home_prep import HomePrepPolicy
 from ro_bot.hunt.policies.return_to_farm import ReturnToFarmPolicy
 from ro_bot.hunt.policies.stack_cell import (
@@ -122,6 +125,14 @@ class HuntController:
         self._path_stuck = PathStuckPolicy(cfg.engagement, self._blacklist)
         self._approach_stall = ApproachStallPolicy(cfg.engagement, self._blacklist)
         self._remote_contested = RemoteContestedPolicy(cfg.engagement, self._blacklist)
+        self._player_closer = PlayerCloserPolicy(
+            cfg.engagement,
+            self._blacklist,
+            sniffer,
+            allowed_names=cfg.allowed_names,
+            dangerous_names=cfg.dangerous_names,
+            char_name=cfg.char_name,
+        )
 
         self._heal = (
             HealPolicy(
@@ -171,8 +182,18 @@ class HuntController:
             and cfg.return_to_farm.transitions
             else None
         )
+        self._farm_arrival = HuntController._make_farm_arrival_policy(
+            cfg,
+            bridge,
+            on_key_pressed=self._buffs.mark_pressed,
+        )
+        on_route_completed = (
+            self._farm_arrival.arm
+            if self._farm_arrival is not None
+            else None
+        )
         self._farm_home_route = self._make_farm_home_route_policy(
-            cfg, aim, player_reader, bridge,
+            cfg, aim, player_reader, bridge, on_completed=on_route_completed,
         )
         self._home_prep = HuntController.make_home_prep_policy(
             cfg, bridge, player_reader, aim, game_hwnd=self._game_hwnd,
@@ -211,11 +232,33 @@ class HuntController:
         self._stack_cell_abandon_counts: dict[tuple[int, int], int] = {}
 
     @staticmethod
+    def _make_farm_arrival_policy(
+        cfg: HuntConfig,
+        bridge: HidBridge,
+        *,
+        on_key_pressed: Callable[[str, float], None] | None = None,
+    ) -> FarmArrivalPolicy | None:
+        rtf = cfg.return_to_farm
+        if rtf is None or not rtf.farm_arrival_steps:
+            return None
+        farm = (rtf.active_farm_map or "").strip()
+        if not farm:
+            return None
+        return FarmArrivalPolicy(
+            rtf.farm_arrival_steps,
+            bridge,
+            farm,
+            on_key_pressed=on_key_pressed,
+        )
+
+    @staticmethod
     def _make_farm_home_route_policy(
         cfg: HuntConfig,
         aim: AimService,
         player_reader: PlayerReader,
         bridge: HidBridge,
+        *,
+        on_completed: Callable[[], None] | None = None,
     ) -> FarmHomeRoutePolicy | None:
         rtf = cfg.return_to_farm
         if rtf is None or rtf.home_route is None:
@@ -224,7 +267,9 @@ class HuntController:
         farm = (rtf.active_farm_map or "").strip()
         if not hr.enabled or len(hr.waypoints) < 2 or not farm:
             return None
-        return FarmHomeRoutePolicy(rtf, aim, player_reader, bridge)
+        return FarmHomeRoutePolicy(
+            rtf, aim, player_reader, bridge, on_completed=on_completed,
+        )
 
     @staticmethod
     def make_home_prep_policy(
@@ -327,6 +372,8 @@ class HuntController:
             self._return_to_farm.shift(delta)
         if self._farm_home_route is not None:
             self._farm_home_route.shift(delta)
+        if self._farm_arrival is not None:
+            self._farm_arrival.shift(delta)
         if self._home_prep is not None:
             self._home_prep.shift(delta)
         if self._overweight is not None:
@@ -354,6 +401,11 @@ class HuntController:
         if (
             self._farm_home_route is not None
             and self._farm_home_route.is_active()
+        ):
+            return NAVIGATION_POLL_SEC
+        if (
+            self._farm_arrival is not None
+            and self._farm_arrival.is_active()
         ):
             return NAVIGATION_POLL_SEC
         return (
@@ -436,8 +488,6 @@ class HuntController:
 
         if not survival and self._heal is not None:
             self._heal.tick(now)
-        if not survival:
-            self._buffs.tick(now)
 
         self._blacklist.expire(now)
 
@@ -471,6 +521,16 @@ class HuntController:
                 if self._engagement.state.gid is not None:
                     self._engagement.state.clear()
                 return
+
+        if self._farm_arrival is not None:
+            self._farm_arrival.tick(now, current_map)
+            if self._farm_arrival.is_active():
+                if self._engagement.state.gid is not None:
+                    self._engagement.state.clear()
+                return
+
+        if not survival:
+            self._buffs.tick(now)
 
         if survival:
             return
@@ -853,6 +913,17 @@ class HuntController:
                     self._idle.on_timeout()
                 return False
 
+            closer = self._player_closer.find_blocker(player_cell, settled)
+            if closer is not None:
+                self._player_closer.abandon(
+                    state, player_cell, settled, closer,
+                )
+                self._after_stack_abandon(player_cell, settled, now)
+                self._press_abandon_target_key("player_closer")
+                if self._idle is not None:
+                    self._idle.on_timeout()
+                return False
+
             if self._approach_stall.is_stuck(
                 state, player_cell, settled, now,
             ):
@@ -1004,6 +1075,11 @@ class HuntController:
                 self._cfg.engagement.ks_guard_min_hp_deficit
             ),
             get_entity_hp=self._entity_hp_pair,
+            mob_blocked_by_closer_player=(
+                (lambda mob: self._player_closer.should_skip(player_cell, mob))
+                if self._player_closer.enabled
+                else None
+            ),
         )
         if not result.candidates:
             self._log_no_candidates(now, visible, result.blocked_by_dead_zone)
@@ -1233,6 +1309,8 @@ class HuntController:
         if self._return_to_farm is not None and self._return_to_farm.is_active():
             return False
         if self._farm_home_route is not None and self._farm_home_route.is_active():
+            return False
+        if self._farm_arrival is not None and self._farm_arrival.is_active():
             return False
         return True
 

@@ -83,6 +83,11 @@ class BuffPolicy:
             return True
         return name not in self._manual_control_maps
 
+    def mark_pressed(self, key: str, now: float) -> None:
+        """Anchor one buff timer after a manual or scripted press."""
+        if key:
+            self._last_at[key] = now
+
     def shift(self, delta: float) -> None:
         if not self._last_at:
             return

@@ -1106,6 +1106,22 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
             data, "ks_guard_blacklist_sec", ctx,
             default=defaults.ks_guard_blacklist_sec,
         ),
+        player_closer_margin=_opt_int(
+            data, "player_closer_margin", ctx,
+            default=defaults.player_closer_margin,
+        ),
+        player_closer_max_mob_dist=_opt_int(
+            data, "player_closer_max_mob_dist", ctx,
+            default=defaults.player_closer_max_mob_dist,
+        ),
+        player_closer_max_player_mob_dist=_opt_int(
+            data, "player_closer_max_player_mob_dist", ctx,
+            default=defaults.player_closer_max_player_mob_dist,
+        ),
+        player_closer_blacklist_sec=_opt_num(
+            data, "player_closer_blacklist_sec", ctx,
+            default=defaults.player_closer_blacklist_sec,
+        ),
         abandon_target_key=_parse_optional_abandon_target_key(
             data, ctx,
             default=defaults.abandon_target_key,

@@ -86,7 +86,8 @@
         "Mantis",
         "Petite",
         "Blue Plant",
-        "Shining Plant"
+        "Shining Plant",
+        "Sleeper"
       ],
       "dangerous": [
         "Hunter Fly",
@@ -128,12 +129,16 @@
       "ks_guard_min_dist": 3,
       "ks_guard_min_hp_deficit": 100,
       "ks_guard_blacklist_sec": 8.0,
+      "player_closer_margin": 0,
+      "player_closer_max_mob_dist": 40,
+      "player_closer_max_player_mob_dist": 25,
+      "player_closer_blacklist_sec": 8.0,
       "abandon_target_key": "t"
     },
     "heal": {
       "key": "q",
       "cooldown_sec": 0.2,
-      "min_hp": 500,
+      "min_hp": 1500,
       "save_recovery_check_sec": 5.0,
       "save_recovery_key": "h"
     },
@@ -178,8 +183,14 @@
       "settle_sec": 1.5,
       "retry_sec": 5.0,
       "max_retries": 4,
-      "active_farm_map": "mjolnir_02",
+      "active_farm_map": "yuno_fild06",
       "maps": {
+        "yuno_fild06": {
+          "yuno_fild05": "right",
+          "yuno_fild02": "left",
+          "yuno_fild03": "up",
+          "hu_fild01": "down"
+        },
         "mjolnir_02": {
           "mjo_dun01": "down",
           "mjolnir_01": "right",

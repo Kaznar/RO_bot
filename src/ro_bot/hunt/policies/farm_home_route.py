@@ -30,6 +30,7 @@ After each map warp (0091) and when the route first arms, ground clicks wait
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ro_bot.core.hid.bridge import HidBridge
@@ -40,8 +41,14 @@ from ro_bot.hunt.routes.segments import beach_dun3_transit
 
 logger = logging.getLogger("ro_bot.hunt")
 
-# Extra sleep after aim-settle and before LMB on waypoint clicks (HID pacing).
-_WAYPOINT_POST_MOVE_SEC = 0.06
+# Ground navigation pacing — RO rejects LMB if MM and click are too tight.
+_WAYPOINT_AIM_SETTLE_SEC = 0.15
+_WAYPOINT_POST_MOVE_SEC = 0.10
+# Even when plan sets ``click_cooldown_sec=0``, never spam faster than this.
+_MIN_WAYPOINT_CLICK_COOLDOWN_SEC = 0.30
+# Click a nearby cell toward the waypoint, not the full distant target (avoids
+# clamp_to_rect edge clicks and “invalid location” on town geometry).
+_MAX_WAYPOINT_STEP_CELLS = 4
 
 
 @dataclass
@@ -67,6 +74,8 @@ class FarmHomeRoutePolicy:
         aim: AimService,
         player_reader: PlayerReader,
         bridge: HidBridge,
+        *,
+        on_completed: Callable[[], None] | None = None,
     ) -> None:
         hr = cfg.home_route
         if hr is None:
@@ -76,6 +85,7 @@ class FarmHomeRoutePolicy:
         self._aim = aim
         self._player_reader = player_reader
         self._bridge = bridge
+        self._on_completed = on_completed
         self._state: _RouteState | None = None
         #: Set by the controller on the same 0091 edge as ``home_prep`` restock
         #: (enter ``home_map`` from a non-home map). Until then, do not arm the
@@ -94,6 +104,11 @@ class FarmHomeRoutePolicy:
     def _disarm(self) -> None:
         self._state = None
         self._navigation_armed = False
+
+    def _complete_route(self) -> None:
+        if self._on_completed is not None:
+            self._on_completed()
+        self._disarm()
 
     def enabled(self) -> bool:
         farm = (self._rtf.active_farm_map or "").strip()
@@ -236,7 +251,7 @@ class FarmHomeRoutePolicy:
             )
             if st.index >= len(wps):
                 logger.info("Farm home route: completed")
-                self._disarm()
+                self._complete_route()
             return
 
         stuck_after = max(0.05, self._hr.stuck_no_move_timeout_sec)
@@ -266,6 +281,7 @@ class FarmHomeRoutePolicy:
                 self._aim.aim_and_click(
                     pc,
                     step_cell,
+                    aim_settle_sec=_WAYPOINT_AIM_SETTLE_SEC,
                     post_move_sleep_sec=_WAYPOINT_POST_MOVE_SEC,
                 )
             except Exception:
@@ -284,15 +300,18 @@ class FarmHomeRoutePolicy:
         if nav_suppressed:
             return
 
-        last = st.last_click_at
-        if last is not None and now - last < self._hr.click_cooldown_sec:
+        if not self._click_cooldown_elapsed(now, st.last_click_at):
             return
 
+        step_cell = self._step_toward_goal(
+            pc, (wp.x, wp.y), _MAX_WAYPOINT_STEP_CELLS,
+        )
         try:
             self._aim.shake_mouse()
             self._aim.aim_and_click(
                 pc,
-                (wp.x, wp.y),
+                step_cell,
+                aim_settle_sec=_WAYPOINT_AIM_SETTLE_SEC,
                 post_move_sleep_sec=_WAYPOINT_POST_MOVE_SEC,
             )
         except Exception:
@@ -300,9 +319,10 @@ class FarmHomeRoutePolicy:
             return
         st.last_click_at = now
         logger.info(
-            "Farm home route: click toward wp %d/%d '%s' target=(%d,%d) "
-            "player=(%d,%d)",
-            idx + 1, len(wps), wp.map_name, wp.x, wp.y, pc[0], pc[1],
+            "Farm home route: click toward wp %d/%d '%s' step=(%d,%d) "
+            "goal=(%d,%d) player=(%d,%d)",
+            idx + 1, len(wps), wp.map_name,
+            step_cell[0], step_cell[1], wp.x, wp.y, pc[0], pc[1],
         )
 
     def _tick_beach_dun3_transit(
@@ -388,6 +408,7 @@ class FarmHomeRoutePolicy:
                 self._aim.aim_and_click(
                     pc,
                     step_cell,
+                    aim_settle_sec=_WAYPOINT_AIM_SETTLE_SEC,
                     post_move_sleep_sec=_WAYPOINT_POST_MOVE_SEC,
                 )
             except Exception:
@@ -413,8 +434,7 @@ class FarmHomeRoutePolicy:
         if nav_suppressed:
             return
 
-        last = st.last_click_at
-        if last is not None and now - last < self._hr.click_cooldown_sec:
+        if not self._click_cooldown_elapsed(now, st.last_click_at):
             return
 
         try:
@@ -422,6 +442,7 @@ class FarmHomeRoutePolicy:
             self._aim.aim_and_click(
                 pc,
                 goal_cell,
+                aim_settle_sec=_WAYPOINT_AIM_SETTLE_SEC,
                 post_move_sleep_sec=_WAYPOINT_POST_MOVE_SEC,
             )
         except Exception:
@@ -436,6 +457,37 @@ class FarmHomeRoutePolicy:
             px,
             py,
         )
+
+    def _click_cooldown_elapsed(
+        self,
+        now: float,
+        last_click_at: float | None,
+    ) -> bool:
+        if last_click_at is None:
+            return True
+        need = max(
+            self._hr.click_cooldown_sec,
+            _MIN_WAYPOINT_CLICK_COOLDOWN_SEC,
+        )
+        return now - last_click_at >= need
+
+    @staticmethod
+    def _step_toward_goal(
+        player: tuple[int, int],
+        goal: tuple[int, int],
+        max_step: int,
+    ) -> tuple[int, int]:
+        """Up to ``max_step`` cells per axis toward ``goal`` (keeps aim in FOV)."""
+        px, py = player
+        gx, gy = goal
+        cap = max(1, max_step)
+        dx = gx - px
+        dy = gy - py
+        if dx == 0 and dy == 0:
+            return goal
+        step_x = max(-cap, min(cap, dx))
+        step_y = max(-cap, min(cap, dy))
+        return (px + step_x, py + step_y)
 
     @staticmethod
     def _recovery_step_cell(
@@ -531,5 +583,5 @@ class FarmHomeRoutePolicy:
             "Farm home route: completed (finish_on_active_farm_map; on %s)",
             farm_st,
         )
-        self._disarm()
+        self._complete_route()
         return True

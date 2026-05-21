@@ -310,6 +310,8 @@ class ReturnToFarmConfig:
     #: Town→farm waypoint navigation (registry or JSON ``home_route``).
     home_navigation_enabled: bool = True
     home_prep: HomePrepConfig | None = None
+    #: Optional override; registry merges from :class:`FarmReturnPlan` when empty.
+    farm_arrival_steps: tuple[HomePrepStep, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -339,6 +341,11 @@ class EngagementConfig:
     ``max_hp - hp >= ks_guard_min_hp_deficit`` (someone else is hitting
     them). Disabled when ``ks_guard_min_dist <= 0``.
 
+    ``player_closer_*`` skips (and abandons) when another visible player
+    is at least ``player_closer_margin`` cells closer to the mob
+    (Manhattan). Positions come from sniffer stop-move packets. Disabled
+    when ``player_closer_margin < 0``.
+
     ``abandon_target_key`` — optional single keypress after these
     abandonments (and KS abandon) to clear target in-game; omit or "" to
     skip.
@@ -358,6 +365,10 @@ class EngagementConfig:
     ks_guard_min_dist: int = 0
     ks_guard_min_hp_deficit: int = 1
     ks_guard_blacklist_sec: float = 8.0
+    player_closer_margin: int = 0
+    player_closer_max_mob_dist: int = 40
+    player_closer_max_player_mob_dist: int = 25
+    player_closer_blacklist_sec: float = 8.0
     abandon_target_key: str | None = None
     #: While the player is within this Manhattan distance of a mob stack,
     #: do not queue idle warp after abandonments (client may be fighting

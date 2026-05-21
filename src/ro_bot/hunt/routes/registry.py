@@ -15,6 +15,9 @@ from ro_bot.hunt.routes.strategies.aldebaran_mjolnir_02 import (
 )
 from ro_bot.hunt.routes.strategies.cmd_fild01 import plan_return_comodo_to_cmd_fild01
 from ro_bot.hunt.routes.strategies.um_fild03 import plan_return_comodo_to_um_fild03
+from ro_bot.hunt.routes.strategies.yuno_yuno_fild06 import (
+    plan_return_yuno_to_yuno_fild06,
+)
 
 FarmReturnPlanFactory = Callable[[], FarmReturnPlan]
 
@@ -23,6 +26,7 @@ FARM_RETURN_PLAN_FACTORIES: dict[str, FarmReturnPlanFactory] = {
     "cmd_fild01": plan_return_comodo_to_cmd_fild01,
     "mjolnir_02": plan_return_aldebaran_to_mjolnir_02,
     "um_fild03": plan_return_comodo_to_um_fild03,
+    "yuno_fild06": plan_return_yuno_to_yuno_fild06,
 }
 
 
@@ -48,15 +52,21 @@ def augment_return_to_farm_from_registry(
     from dataclasses import replace
 
     if not rtf.home_navigation_enabled:
-        return replace(rtf, home_route=None, home_prep=None)
+        return replace(rtf, home_route=None, home_prep=None, farm_arrival_steps=())
     if rtf.home_route is not None:
         return rtf
     plan = resolve_farm_return_plan(rtf.active_farm_map)
     if plan is None:
         return rtf
     merged_prep = rtf.home_prep if rtf.home_prep is not None else plan.home_prep
+    merged_arrival = (
+        rtf.farm_arrival_steps
+        if rtf.farm_arrival_steps
+        else plan.farm_arrival_steps
+    )
     return replace(
         rtf,
         home_route=plan.as_home_route_config(),
         home_prep=merged_prep,
+        farm_arrival_steps=merged_arrival,
     )
