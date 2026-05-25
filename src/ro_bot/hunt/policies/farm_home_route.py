@@ -495,22 +495,49 @@ class FarmHomeRoutePolicy:
         goal: tuple[int, int],
         variant: int,
     ) -> tuple[int, int]:
-        """One orthogonal step toward ``goal`` (alternating axis by variant)."""
+        """One-cell offset cycling through orthogonal + diagonal nudges.
+
+        Variant 1 is always the direct step toward ``goal`` so a single
+        retry behaves the same as before. Subsequent variants add
+        perpendicular sidesteps — critical when the goal lies on the same
+        axis as the player (``dx == 0`` or ``dy == 0``), where the old
+        single-option recovery just re-clicked the blocked cell forever
+        (RO often reports "unwalkable" for a cell that's actually free
+        only via a small detour).
+        """
         px, py = player
         gx, gy = goal
-        opts: list[tuple[int, int]] = []
-        if gx > px:
-            opts.append((px + 1, py))
-        elif gx < px:
-            opts.append((px - 1, py))
-        if gy > py:
-            opts.append((px, py + 1))
-        elif gy < py:
-            opts.append((px, py - 1))
-        if not opts:
+        dx = gx - px
+        dy = gy - py
+        if dx == 0 and dy == 0:
             return goal
-        pick = (variant - 1) % len(opts)
-        return opts[pick]
+        sx = 1 if dx > 0 else (-1 if dx < 0 else 0)
+        sy = 1 if dy > 0 else (-1 if dy < 0 else 0)
+        if sx != 0 and sy != 0:
+            opts: tuple[tuple[int, int], ...] = (
+                (px + sx, py),
+                (px, py + sy),
+                (px + sx, py + sy),
+                (px + sx, py - sy),
+                (px - sx, py + sy),
+            )
+        elif sy != 0:
+            opts = (
+                (px, py + sy),
+                (px + 1, py + sy),
+                (px - 1, py + sy),
+                (px + 1, py),
+                (px - 1, py),
+            )
+        else:
+            opts = (
+                (px + sx, py),
+                (px + sx, py + 1),
+                (px + sx, py - 1),
+                (px, py + 1),
+                (px, py - 1),
+            )
+        return opts[(variant - 1) % len(opts)]
 
     def shift(self, delta: float) -> None:
         """Pause/resume: slide click timestamps."""

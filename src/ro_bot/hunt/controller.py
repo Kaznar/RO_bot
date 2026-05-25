@@ -121,6 +121,11 @@ class HuntController:
             cell_observer=self._cells,
             dead_zone_filter=dead_zone_filter,
             reaim_cooldown_sec=cfg.engagement.reaim_click_cooldown_sec,
+            bridge=bridge,
+            reaim_hold_dist=cfg.engagement.reaim_hold_dist,
+            engage_skill_key=cfg.engagement.engage_skill_key,
+            engage_skill_delay_sec=cfg.engagement.engage_skill_delay_sec,
+            engage_skill_repeat_sec=cfg.engagement.engage_skill_repeat_sec,
         )
         self._path_stuck = PathStuckPolicy(cfg.engagement, self._blacklist)
         self._approach_stall = ApproachStallPolicy(cfg.engagement, self._blacklist)
@@ -213,6 +218,14 @@ class HuntController:
         # When only dead-zone-blocked mobs are visible, give them a short
         # grace window to walk out, then allow idle teleport anyway.
         self._dead_zone_blocked_since: float | None = None
+        # When every visible whitelisted mob is in the blacklist (i.e. the
+        # only candidate just timed out and is in cooldown), force idle TP
+        # after ``engagement.all_blacklisted_force_tp_sec`` so we don't loop
+        # forever on the same unreachable target.
+        self._all_blacklisted_since: float | None = None
+        #: After idle TP on a hunt map, re-teleport while other players
+        #: remain visible until this monotonic deadline.
+        self._post_tp_player_check_until: float | None = None
         # Active while on a map from manual_control_maps.
         # In this mode the hunt loop behaves like pause: no attack, no TP,
         # no policy actions. Player controls movement manually.
@@ -384,6 +397,10 @@ class HuntController:
             self._last_weight_log += delta
         if self._dead_zone_blocked_since is not None:
             self._dead_zone_blocked_since += delta
+        if self._all_blacklisted_since is not None:
+            self._all_blacklisted_since += delta
+        if self._post_tp_player_check_until is not None:
+            self._post_tp_player_check_until += delta
         self._stall_guard.shift(delta)
         logger.info("Resumed after %.1fs paused", delta)
 
@@ -579,6 +596,12 @@ class HuntController:
             if player_cell is None:
                 return
 
+        if self._maybe_retp_if_players_visible(now, current_map):
+            return
+
+        if self._maybe_defer_hunt_for_players(now, player_cell, current_map):
+            return
+
         self._select_and_engage(visible, player_cell, now)
         self._maybe_recover_automation_stall(now, current_map)
 
@@ -605,12 +628,14 @@ class HuntController:
         self._cells.clear()
         self._immediate_teleport_pending = False
         self._dead_zone_blocked_since = None
+        self._all_blacklisted_since = None
         if self._idle is not None:
             self._idle.on_map_reset()
         self._clear_stack_state()
         self._stall_guard.reset(time.monotonic())
         if self._death_return is not None:
             self._death_return.on_map_reset()
+        self._player_closer.on_map_reset()
         from_map: str | None = None
         for old_map, new_map in pairs:
             if new_map == map_name:
@@ -630,6 +655,69 @@ class HuntController:
         if self._overweight is not None:
             self._overweight.on_map_reset()
         self._refresh_client_rect_from_window()
+        if (
+            mode == "active-hunt"
+            and self._cfg.engagement.player_visible_retp_sec > 0
+        ):
+            for old_map, new_map in pairs:
+                if old_map and old_map == new_map:
+                    self._post_tp_player_check_until = time.monotonic()
+                    break
+
+    def _maybe_retp_if_players_visible(
+        self,
+        now: float,
+        current_map: str,
+    ) -> bool:
+        """Re-teleport after idle TP while other players remain visible."""
+        if self._post_tp_player_check_until is None:
+            return False
+        if (
+            self._cfg.engagement.player_visible_retp_sec <= 0
+            or not self._player_closer.enabled
+            or self._idle is None
+            or self._is_manual_control_map(current_map)
+        ):
+            self._post_tp_player_check_until = None
+            return False
+        others = self._player_closer.visible_other_players()
+        if not others:
+            self._post_tp_player_check_until = None
+            return False
+        labels = ", ".join(
+            f"{name}@({x},{y})" for _, name, x, y in others[:3]
+        )
+        if len(others) > 3:
+            labels += f", +{len(others) - 3} more"
+        if not self._idle.force_fire(
+            now,
+            f"player(s) visible after teleport ({labels})",
+        ):
+            return False
+        logger.warning(
+            "Re-teleport: %d other player(s) visible after idle TP on %s",
+            len(others), current_map,
+        )
+        self._stall_guard.mark_progress(now)
+        return True
+
+    def _maybe_defer_hunt_for_players(
+        self,
+        now: float,
+        player_cell: tuple[int, int],
+        current_map: str,
+    ) -> bool:
+        """KS priority: no new engages while other players are visible."""
+        deferred, reason = self._player_closer.hunt_deferred(player_cell)
+        if not deferred:
+            return False
+        if self._idle is None:
+            logger.info("KS prio: deferring hunt — %s (no idle_action)", reason)
+            return True
+        if self._idle.force_fire(now, f"KS prio — {reason}"):
+            logger.warning("KS prio: deferring hunt — %s", reason)
+            self._stall_guard.mark_progress(now)
+        return True
 
     def _refresh_client_rect_from_window(self) -> None:
         """Re-read client area so HUD ``click_client`` stays aligned if the window moved."""
@@ -792,6 +880,7 @@ class HuntController:
             self._engagement.state.clear()
         self._immediate_teleport_pending = False
         self._dead_zone_blocked_since = None
+        self._all_blacklisted_since = None
         if self._idle is not None:
             # Re-entering combat maps starts with a fresh idle window.
             self._idle.on_map_reset()
@@ -866,23 +955,44 @@ class HuntController:
         if player_cell is None:
             return True
 
-        engaged_cell = self._cells.settled_cell(state.gid, now)
-        if engaged_cell is not None:
+        mob_cell = self._cells.settled_cell(state.gid, now)
+        if mob_cell is None:
+            ent = self._sniffer.get_entity(state.gid)
+            if ent is not None and (ent.x != 0 or ent.y != 0):
+                mob_cell = (ent.x, ent.y)
+
+        abort, reason = self._player_closer.abort_engaged(
+            player_cell, mob_cell,
+        )
+        if abort:
+            logger.warning(
+                "KS prio: abandoning engaged gid=%d name='%s' — %s",
+                state.gid, state.name, reason,
+            )
+            state.clear()
+            if self._cfg.engagement.player_closer_force_tp:
+                self._immediate_teleport_pending = True
+            self._press_abandon_target_key("ks_prio")
+            if self._idle is not None:
+                self._idle.on_timeout()
+            return False
+
+        if mob_cell is not None:
             for d_gid in died:
                 if d_gid == state.gid:
                     continue
                 dead_cell = self._cells.settled_cell(d_gid, now)
-                if dead_cell != engaged_cell:
+                if dead_cell != mob_cell:
                     continue
                 logger.info(
                     "Stack co-kill: gid=%d died on cell %s while engaged "
                     "gid=%d name='%s'",
-                    d_gid, engaged_cell, state.gid, state.name,
+                    d_gid, mob_cell, state.gid, state.name,
                 )
                 self._remember_stack_preference(
                     now,
                     preferred_gid=state.gid,
-                    preferred_cell=engaged_cell,
+                    preferred_cell=mob_cell,
                 )
                 self._stall_guard.mark_progress(now)
                 state.approach_anchor_cell = player_cell
@@ -908,6 +1018,8 @@ class HuntController:
                     state, player_cell, settled, ent.hp, ent.max_hp,
                 )
                 self._after_stack_abandon(player_cell, settled, now)
+                if self._cfg.engagement.player_closer_force_tp:
+                    self._immediate_teleport_pending = True
                 self._press_abandon_target_key("ks_guard")
                 if self._idle is not None:
                     self._idle.on_timeout()
@@ -919,6 +1031,8 @@ class HuntController:
                     state, player_cell, settled, closer,
                 )
                 self._after_stack_abandon(player_cell, settled, now)
+                if self._cfg.engagement.player_closer_force_tp:
+                    self._immediate_teleport_pending = True
                 self._press_abandon_target_key("player_closer")
                 if self._idle is not None:
                     self._idle.on_timeout()
@@ -1038,6 +1152,30 @@ class HuntController:
                 return True
         return False
 
+    def _sniffer_shows_engageable_trackable_mob(self) -> bool:
+        """Like :meth:`_sniffer_shows_trackable_mob_name` but skips
+        blacklisted GIDs.
+
+        Used by the idle-suppression branch in :meth:`_select_and_engage`
+        so that we *only* defer the idle teleport while there is a
+        whitelisted mob the controller can still legitimately engage —
+        not when every visible whitelisted entity is in the blacklist
+        (which would otherwise hold the bot AFK forever on the same
+        unreachable target).
+        """
+        for ent in self._sniffer.get_all_entities():
+            if not ent.name:
+                continue
+            if not (
+                self._cfg.target_all_mobs
+                or ent.name in self._cfg.allowed_names
+            ):
+                continue
+            if ent.gid in self._blacklist:
+                continue
+            return True
+        return False
+
     def _press_abandon_target_key(self, reason: str) -> None:
         key = self._cfg.engagement.abandon_target_key
         if not key:
@@ -1109,13 +1247,41 @@ class HuntController:
                 if self._idle.force_fire(now, "path stuck — no other candidates"):
                     self._stall_guard.mark_progress(now)
                 self._immediate_teleport_pending = False
+                self._all_blacklisted_since = None
+            elif (
+                self._cfg.idle_action is not None
+                and self._cfg.idle_action.suppress_while_visible_name
+                and self._sniffer_shows_engageable_trackable_mob()
+            ):
+                self._all_blacklisted_since = None
+                self._idle.on_visible_trackable_name()
             elif (
                 self._cfg.idle_action is not None
                 and self._cfg.idle_action.suppress_while_visible_name
                 and self._sniffer_shows_trackable_mob_name()
             ):
-                self._idle.on_visible_trackable_name()
+                # Every visible whitelisted mob is blacklisted — force TP
+                # after the configured grace so we don't loop on the same
+                # unreachable target. ``<= 0`` keeps the legacy behaviour.
+                fire_after = self._cfg.engagement.all_blacklisted_force_tp_sec
+                if fire_after <= 0:
+                    self._idle.on_visible_trackable_name()
+                elif self._all_blacklisted_since is None:
+                    self._all_blacklisted_since = now
+                    self._idle.on_visible_trackable_name()
+                elif now - self._all_blacklisted_since >= fire_after:
+                    stalled = now - self._all_blacklisted_since
+                    if self._idle.force_fire(
+                        now,
+                        f"all visible candidates blacklisted for "
+                        f"{stalled:.1f}s — warp out",
+                    ):
+                        self._stall_guard.mark_progress(now)
+                    self._all_blacklisted_since = None
+                else:
+                    self._idle.on_visible_trackable_name()
             elif self._idle.tick(now):
+                self._all_blacklisted_since = None
                 self._stall_guard.mark_progress(now)
             return
 
@@ -1151,6 +1317,7 @@ class HuntController:
 
         self._dead_zone_blocked_since = None
         self._immediate_teleport_pending = False
+        self._all_blacklisted_since = None
         preferred_gid, preferred_cell = self._active_stack_preference(now)
         target = pick_candidate(
             player_cell,
@@ -1158,6 +1325,17 @@ class HuntController:
             preferred_gid=preferred_gid,
             preferred_cell=preferred_cell,
         )
+        deferred, defer_reason = self._player_closer.hunt_deferred(player_cell)
+        if deferred:
+            if self._idle is not None and self._idle.force_fire(
+                now, f"KS prio — {defer_reason}",
+            ):
+                logger.warning(
+                    "KS prio: blocked engage on gid=%d — %s",
+                    target.gid, defer_reason,
+                )
+                self._stall_guard.mark_progress(now)
+            return
         if self._idle is not None:
             self._idle.on_engaged()
         self._remember_stack_preference(

@@ -345,17 +345,26 @@ class PacketSniffer:
                 return None
             return _clone(ent)
 
-    def get_all_entities(self) -> list[EntityState]:
-        """Snapshots of all fresh entities, excluding the local player."""
+    def snapshot_entities(self, *, require_name: bool = False) -> list[EntityState]:
+        """Fresh entity cache snapshots, excluding the local player.
+
+        ``require_name=True`` (default for mob targeting) drops stop-move
+        shells that have a cell but no 0x0A30 name yet. Player-closer
+        passes ``require_name=False`` so GID-only player stop-moves count.
+        """
         now = time.monotonic()
         with self._lock:
             return [
                 _clone(e)
                 for e in self._entities.values()
                 if now - e.last_seen <= ENTITY_STALE_TIMEOUT
-                and e.name
                 and e.gid != self._player_gid
+                and (not require_name or e.name)
             ]
+
+    def get_all_entities(self) -> list[EntityState]:
+        """Snapshots of all fresh named entities, excluding the local player."""
+        return self.snapshot_entities(require_name=True)
 
     def is_entity_alive(self, gid: int) -> bool:
         with self._lock:

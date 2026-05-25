@@ -49,14 +49,15 @@ class StorageWithdrawGrid:
 _DEFAULT_GRID = StorageWithdrawGrid(
     col_xs=(335, 335),
     row0_y=62,
-    row_pitch_px=32,
+    row_pitch_px=34,
 )
 
 # Default home-prep withdraw profile (**all towns** share this HUD).
 # Change rows/columns/qty keys here only — not per-city modules.
 DEFAULT_HOME_PREP_WITHDRAW_SLOTS: tuple[tuple[int, int, tuple[str, ...]], ...] = (
-    (5, 0, ("1", "0", "enter")),
-    (8, 1, ("1", "enter")),
+    (5, 0, ("3", "enter")),
+    (9, 1, ("1", "enter")),
+    (12, 1, ("80", "enter")),
 )
 
 
@@ -88,7 +89,7 @@ def deposit_to_storage_steps() -> tuple[HomePrepStep, ...]:
         HomePrepStep(
             click_client=_EQUIP_ITEM_CLIENT,
             drag_to_client=_STORAGE_FROM_EQUIP_CLIENT,
-            click_client_drag_repeat_count=30,
+            click_client_drag_repeat_count=5,
             click_client_drag_repeat_interval_sec=0.38,
             key="",
             delay_after_sec=1.0,
@@ -101,7 +102,7 @@ def deposit_to_storage_steps() -> tuple[HomePrepStep, ...]:
         HomePrepStep(
             click_client=_CONSUMABLE_ITEM_CLIENT,
             drag_to_client=_STORAGE_FROM_CONSUMABLE_CLIENT,
-            click_client_drag_repeat_count=20,
+            click_client_drag_repeat_count=10,
             click_client_drag_repeat_interval_sec=0.38,
             key="enter",
             delay_after_sec=1.0,
@@ -134,6 +135,24 @@ def _keys_to_steps(keys: tuple[str, ...], delays: tuple[float, ...]) -> tuple[Ho
     )
 
 
+def _expand_qty_keys(keys: tuple[str, ...]) -> tuple[str, ...]:
+    """Split multi-digit numeric tokens into per-character key presses.
+
+    The HID layer (:meth:`HidBridge.press_key`) only accepts a single
+    character or a named key (``"enter"``, ``"space"``, …). Withdraw-qty
+    profiles however want to read like decimal numbers (``"80"``), so any
+    purely numeric token longer than one character is split into single
+    digits. Named keys and single-character tokens pass through unchanged.
+    """
+    out: list[str] = []
+    for k in keys:
+        if len(k) > 1 and k.isdigit():
+            out.extend(k)
+        else:
+            out.append(k)
+    return tuple(out)
+
+
 def withdraw_storage_row(
     row: int,
     *,
@@ -142,20 +161,30 @@ def withdraw_storage_row(
     qty_keys: tuple[str, ...] = ("1", "enter"),
     key_delays: tuple[float, ...] | None = None,
 ) -> tuple[HomePrepStep, ...]:
-    """Withdraw one stack from a grid row (0-based). Default qty = pick 1 + confirm."""
+    """Withdraw one stack from a grid row (0-based). Default qty = pick 1 + confirm.
+
+    Multi-digit numeric tokens in ``qty_keys`` (e.g. ``"80"``) are expanded
+    into single-digit presses before timing is applied; ``key_delays``, when
+    supplied, must match the expanded length.
+    """
     g = grid or _DEFAULT_GRID
     cell = g.slot_client(row, col)
+    expanded = _expand_qty_keys(qty_keys)
     if key_delays is None:
-        n = len(qty_keys)
+        n = len(expanded)
         if n == 1:
             key_delays = (1.0,)
         else:
-            key_delays = tuple(0.5 for _ in qty_keys[:-1]) + (1.0,)
-    if len(qty_keys) != len(key_delays):
-        raise ValueError("qty_keys and key_delays must match")
+            key_delays = tuple(0.5 for _ in expanded[:-1]) + (1.0,)
+    if len(expanded) != len(key_delays):
+        raise ValueError(
+            f"qty_keys expanded to {len(expanded)} presses but got "
+            f"{len(key_delays)} key_delays (multi-digit numeric tokens "
+            f"split per character; original qty_keys={qty_keys})"
+        )
     return (
         *withdraw_from_storage_cell(cell),
-        *_keys_to_steps(qty_keys, key_delays),
+        *_keys_to_steps(expanded, key_delays),
     )
 
 

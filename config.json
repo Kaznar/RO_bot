@@ -85,9 +85,9 @@
         "Flora",
         "Mantis",
         "Petite",
-        "Blue Plant",
-        "Shining Plant",
-        "Sleeper"
+        "Sleeper",
+        "Sohee",
+        "Giant Whisper"
       ],
       "dangerous": [
         "Hunter Fly",
@@ -109,7 +109,8 @@
           "Rideword",
           "Dragon Tail",
           "Familiar",
-          "Drainliar"
+          "Drainliar",
+          "Sohee"
         ],
         "y_offset_cells": 1.5
       }
@@ -118,6 +119,7 @@
       "kill_timeout_sec": 15.0,
       "blacklist_sec": 10.0,
       "reaim_click_cooldown_sec": 0.3,
+      "reaim_hold_dist": 3,
       "aim_settle_sec": 0.1,
       "target_settle_sec": 0.5,
       "path_stuck_min_dist": 5,
@@ -127,18 +129,29 @@
       "approach_stall_min_dist": 3,
       "approach_stall_blacklist_sec": 5.0,
       "ks_guard_min_dist": 3,
-      "ks_guard_min_hp_deficit": 100,
-      "ks_guard_blacklist_sec": 8.0,
-      "player_closer_margin": 0,
-      "player_closer_max_mob_dist": 40,
-      "player_closer_max_player_mob_dist": 25,
-      "player_closer_blacklist_sec": 8.0,
-      "abandon_target_key": "t"
+      "ks_guard_min_hp_deficit": 1,
+      "ks_guard_blacklist_sec": 30.0,
+      "player_closer_margin": 3,
+      "player_near_mob_radius": 45,
+      "player_near_bot_radius": 40,
+      "player_closer_max_mob_dist": 0,
+      "player_closer_max_player_mob_dist": 60,
+      "player_closer_blacklist_sec": 30.0,
+      "player_closer_force_tp": true,
+      "player_defer_hunt_if_visible": true,
+      "player_visible_grace_sec": 25.0,
+      "player_visible_retp_sec": 5.0,
+      "player_gid_min": 3000000,
+      "player_gid_max": 4000000,
+      "all_blacklisted_force_tp_sec": 5.0,
+      "abandon_target_key": "t",
+      "engage_skill_key": "",
+      "engage_skill_delay_sec": 0.2
     },
     "heal": {
       "key": "q",
       "cooldown_sec": 0.2,
-      "min_hp": 1500,
+      "min_hp": 500,
       "save_recovery_check_sec": 5.0,
       "save_recovery_key": "h"
     },
@@ -178,12 +191,12 @@
       }
     ],
     "return_to_farm": {
-      "home_navigation_enabled": true,
+      "home_navigation_enabled": false,
       "walk_cells": 3,
       "settle_sec": 1.5,
       "retry_sec": 5.0,
       "max_retries": 4,
-      "active_farm_map": "yuno_fild06",
+      "active_farm_map": "pay_dun03",
       "maps": {
         "yuno_fild06": {
           "yuno_fild05": "right",
@@ -218,6 +231,13 @@
           "ein_fild03": "right",
           "einbroch": "up",
           "ein_fild05": "left"
+        },
+        "xmas_dun02": {
+          "xmas_dun01": "left"
+        },
+        "pay_dun03": {
+          "pay_dun02": "up",
+          "pay_dun04": "up"
         }
       }
     }

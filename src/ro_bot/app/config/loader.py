@@ -1027,6 +1027,24 @@ def _parse_farm_transitions(
     return tuple(items)
 
 
+def _parse_optional_skill_key(
+    data: dict,
+    key: str,
+    ctx: str,
+    *,
+    default: str | None,
+) -> str | None:
+    if key not in data:
+        return default
+    raw = data[key]
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        raise ConfigError(f"{ctx}.{key}: expected string or empty")
+    stripped = raw.strip()
+    return stripped or None
+
+
 def _parse_optional_abandon_target_key(
     data: dict, ctx: str, *, default: str | None,
 ) -> str | None:
@@ -1041,6 +1059,38 @@ def _parse_optional_abandon_target_key(
         )
     stripped = raw.strip()
     return stripped or None
+
+
+def _parse_player_closer_force_tp(
+    data: dict,
+    ctx: str,
+    *,
+    default: bool,
+) -> bool:
+    if "player_closer_force_tp" not in data:
+        return default
+    raw = data["player_closer_force_tp"]
+    if not isinstance(raw, bool):
+        raise ConfigError(
+            f"{ctx}.player_closer_force_tp: expected boolean",
+        )
+    return raw
+
+
+def _parse_player_defer_hunt_if_visible(
+    data: dict,
+    ctx: str,
+    *,
+    default: bool,
+) -> bool:
+    if "player_defer_hunt_if_visible" not in data:
+        return default
+    raw = data["player_defer_hunt_if_visible"]
+    if not isinstance(raw, bool):
+        raise ConfigError(
+            f"{ctx}.player_defer_hunt_if_visible: expected boolean",
+        )
+    return raw
 
 
 def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
@@ -1059,6 +1109,10 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
         reaim_click_cooldown_sec=_opt_num(
             data, "reaim_click_cooldown_sec", ctx,
             default=defaults.reaim_click_cooldown_sec,
+        ),
+        reaim_hold_dist=_opt_int(
+            data, "reaim_hold_dist", ctx,
+            default=defaults.reaim_hold_dist,
         ),
         aim_settle_sec=_opt_num(
             data, "aim_settle_sec", ctx, default=defaults.aim_settle_sec,
@@ -1110,6 +1164,14 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
             data, "player_closer_margin", ctx,
             default=defaults.player_closer_margin,
         ),
+        player_near_mob_radius=_opt_int(
+            data, "player_near_mob_radius", ctx,
+            default=defaults.player_near_mob_radius,
+        ),
+        player_near_bot_radius=_opt_int(
+            data, "player_near_bot_radius", ctx,
+            default=defaults.player_near_bot_radius,
+        ),
         player_closer_max_mob_dist=_opt_int(
             data, "player_closer_max_mob_dist", ctx,
             default=defaults.player_closer_max_mob_dist,
@@ -1121,6 +1183,32 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
         player_closer_blacklist_sec=_opt_num(
             data, "player_closer_blacklist_sec", ctx,
             default=defaults.player_closer_blacklist_sec,
+        ),
+        player_closer_force_tp=_parse_player_closer_force_tp(
+            data, ctx, default=defaults.player_closer_force_tp,
+        ),
+        player_visible_retp_sec=_opt_num(
+            data, "player_visible_retp_sec", ctx,
+            default=defaults.player_visible_retp_sec,
+        ),
+        player_defer_hunt_if_visible=_parse_player_defer_hunt_if_visible(
+            data, ctx, default=defaults.player_defer_hunt_if_visible,
+        ),
+        player_visible_grace_sec=_opt_num(
+            data, "player_visible_grace_sec", ctx,
+            default=defaults.player_visible_grace_sec,
+        ),
+        player_gid_min=_opt_int(
+            data, "player_gid_min", ctx,
+            default=defaults.player_gid_min,
+        ),
+        player_gid_max=_opt_int(
+            data, "player_gid_max", ctx,
+            default=defaults.player_gid_max,
+        ),
+        all_blacklisted_force_tp_sec=_opt_num(
+            data, "all_blacklisted_force_tp_sec", ctx,
+            default=defaults.all_blacklisted_force_tp_sec,
         ),
         abandon_target_key=_parse_optional_abandon_target_key(
             data, ctx,
@@ -1137,6 +1225,18 @@ def _parse_engagement(data: Any, ctx: str) -> EngagementConfig:
         stack_cell_warp_after_abandons=_opt_int(
             data, "stack_cell_warp_after_abandons", ctx,
             default=defaults.stack_cell_warp_after_abandons,
+        ),
+        engage_skill_key=_parse_optional_skill_key(
+            data, "engage_skill_key", ctx,
+            default=defaults.engage_skill_key,
+        ),
+        engage_skill_delay_sec=_opt_num(
+            data, "engage_skill_delay_sec", ctx,
+            default=defaults.engage_skill_delay_sec,
+        ),
+        engage_skill_repeat_sec=_opt_num(
+            data, "engage_skill_repeat_sec", ctx,
+            default=defaults.engage_skill_repeat_sec,
         ),
     )
 

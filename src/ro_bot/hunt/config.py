@@ -343,8 +343,33 @@ class EngagementConfig:
 
     ``player_closer_*`` skips (and abandons) when another visible player
     is at least ``player_closer_margin`` cells closer to the mob
-    (Manhattan). Positions come from sniffer stop-move packets. Disabled
-    when ``player_closer_margin < 0``.
+    (Manhattan), or when any player is within ``player_near_mob_radius``
+    cells of the mob regardless of who is closer. Positions come from
+    sniffer stop-move packets. Disabled when ``player_closer_margin < 0``
+    and ``player_near_mob_radius <= 0``.
+
+    ``player_gid_min`` / ``player_gid_max`` delimit the player account-ID
+    range (on this server commonly 3 000 000–4 000 000). Any entity
+    whose GID falls in ``[player_gid_min, player_gid_max)`` with a known
+    map cell is treated as another player for ``player_closer_*``, even
+    when the 0x0A30 name has not arrived yet. Set ``player_gid_max`` to
+    ``0`` to disable the GID range and fall back to the name-only
+    heuristic.
+
+    ``player_visible_retp_sec``: after idle teleport on a hunt map
+    (same map name, new coordinates), keep re-teleporting while any
+    other player remains visible. ``0`` disables the post-TP scan only.
+
+    ``player_defer_hunt_if_visible``: when true, never start a new
+    engagement while any other player is visible — idle teleport instead
+    (KS avoidance takes priority over farming).
+
+    ``all_blacklisted_force_tp_sec`` breaks the "loop forever on the
+    only visible target" deadlock: when every visible whitelisted name
+    is in the GID blacklist (typically because the same unreachable mob
+    has timed out one or more times in a row), force an idle teleport
+    after this many seconds instead of waiting out the blacklist and
+    immediately re-engaging the same mob again. ``0`` disables.
 
     ``abandon_target_key`` — optional single keypress after these
     abandonments (and KS abandon) to clear target in-game; omit or "" to
@@ -353,6 +378,10 @@ class EngagementConfig:
     kill_timeout_sec: float = 15.0
     blacklist_sec: float = 30.0
     reaim_click_cooldown_sec: float = 0.3
+    #: When the mob has not moved and the player is within this many cells,
+    #: skip LMB re-clicks (prevents 1-cell walk jitter). Skill mode uses
+    #: ``engage_skill_repeat_sec`` instead.
+    reaim_hold_dist: int = 3
     aim_settle_sec: float = 0.10
     target_settle_sec: float = 2.5
     path_stuck_min_dist: int = 5
@@ -362,13 +391,30 @@ class EngagementConfig:
     approach_stall_timeout_sec: float = 2.5
     approach_stall_min_dist: int = 3
     approach_stall_blacklist_sec: float = 5.0
-    ks_guard_min_dist: int = 0
+    ks_guard_min_dist: int = 3
     ks_guard_min_hp_deficit: int = 1
-    ks_guard_blacklist_sec: float = 8.0
-    player_closer_margin: int = 0
-    player_closer_max_mob_dist: int = 40
-    player_closer_max_player_mob_dist: int = 25
-    player_closer_blacklist_sec: float = 8.0
+    ks_guard_blacklist_sec: float = 30.0
+    player_closer_margin: int = 3
+    player_near_mob_radius: int = 45
+    #: Skip hunt when any other player is within this many cells of the bot.
+    player_near_bot_radius: int = 40
+    player_closer_max_mob_dist: int = 0
+    player_closer_max_player_mob_dist: int = 60
+    player_closer_blacklist_sec: float = 30.0
+    player_closer_force_tp: bool = True
+    #: When true, do not start new engagements while any other player is
+    #: visible on the map (GID range + cell). Prefer idle teleport over KS.
+    player_defer_hunt_if_visible: bool = True
+    #: After the last sighting of another player, keep deferring hunt for this
+    #: many seconds (covers sniffer gaps and standing-still players).
+    player_visible_grace_sec: float = 25.0
+    #: After idle teleport on a hunt map (same map, new coords), keep
+    #: re-teleporting while other players remain visible. ``0`` disables
+    #: the post-TP scan (``player_defer_hunt_if_visible`` still applies).
+    player_visible_retp_sec: float = 5.0
+    player_gid_min: int = 3_000_000
+    player_gid_max: int = 4_000_000
+    all_blacklisted_force_tp_sec: float = 5.0
     abandon_target_key: str | None = None
     #: While the player is within this Manhattan distance of a mob stack,
     #: do not queue idle warp after abandonments (client may be fighting
@@ -379,6 +425,13 @@ class EngagementConfig:
     #: After this many abandons on the same cell without a kill, force idle
     #: warp before re-engaging. ``0`` disables the ladder.
     stack_cell_warp_after_abandons: int = 3
+    #: Hotbar key pressed before every engage / re-aim click (e.g. ``"w"``).
+    #: When set, each attack cycle is key + LMB target click until the mob dies.
+    engage_skill_key: str | None = None
+    #: Pause after ``engage_skill_key`` before the aim click (seconds).
+    engage_skill_delay_sec: float = 0.05
+    #: In skill mode, min seconds between recasts on a stationary in-range mob.
+    engage_skill_repeat_sec: float = 1.5
 
 
 @dataclass(frozen=True)
