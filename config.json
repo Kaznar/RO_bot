@@ -48,7 +48,7 @@
     ]
   },
   "profile": {
-    "char_name": "JoJo",
+    "char_name": "M o n K",
     "manual_control_maps": [
       "alberta",
       "payon",
@@ -63,7 +63,8 @@
       "niflheim",
       "einbroch",
       "lighthalzen",
-      "hugel"
+      "hugel",
+      "xmas"
     ],
     "mobs": {
       "allowed": [
@@ -82,23 +83,28 @@
         "Parasite",
         "Dragon Tail",
         "Geographer",
-        "Flora",
         "Mantis",
         "Petite",
         "Sleeper",
         "Sohee",
-        "Giant Whisper"
+        "Giant Whisper",
+        "Wolf",
+        "Mandragora",
+        "Yoyo"
       ],
       "dangerous": [
         "Hunter Fly",
         "Dragon Fly",
         "Garm Baby",
+        "Baby Hatii",
         "Knight of Windstorm",
+        "Stormy Knight",
         "Goblin Leader",
         "Orc Hero",
         "High Orc",
         "Ungoliant",
-        "Gryphon"
+        "Gryphon",
+        "Choco"
       ]
     },
     "aim_offsets": [
@@ -116,10 +122,10 @@
       }
     ],
     "engagement": {
-      "kill_timeout_sec": 15.0,
+      "kill_timeout_sec": 45.0,
       "blacklist_sec": 10.0,
       "reaim_click_cooldown_sec": 0.3,
-      "reaim_hold_dist": 3,
+      "reaim_hold_dist": 0,
       "aim_settle_sec": 0.1,
       "target_settle_sec": 0.5,
       "path_stuck_min_dist": 5,
@@ -128,19 +134,19 @@
       "approach_stall_timeout_sec": 2.0,
       "approach_stall_min_dist": 3,
       "approach_stall_blacklist_sec": 5.0,
-      "ks_guard_min_dist": 3,
+      "ks_guard_min_dist": 0,
       "ks_guard_min_hp_deficit": 1,
       "ks_guard_blacklist_sec": 30.0,
-      "player_closer_margin": 3,
-      "player_near_mob_radius": 45,
-      "player_near_bot_radius": 40,
+      "player_closer_margin": -1,
+      "player_near_mob_radius": 0,
+      "player_near_bot_radius": 0,
       "player_closer_max_mob_dist": 0,
       "player_closer_max_player_mob_dist": 60,
       "player_closer_blacklist_sec": 30.0,
-      "player_closer_force_tp": true,
-      "player_defer_hunt_if_visible": true,
-      "player_visible_grace_sec": 25.0,
-      "player_visible_retp_sec": 5.0,
+      "player_closer_force_tp": false,
+      "player_defer_hunt_if_visible": false,
+      "player_visible_grace_sec": 0,
+      "player_visible_retp_sec": 0,
       "player_gid_min": 3000000,
       "player_gid_max": 4000000,
       "all_blacklisted_force_tp_sec": 5.0,
@@ -149,11 +155,20 @@
       "engage_skill_delay_sec": 0.2
     },
     "heal": {
-      "key": "q",
-      "cooldown_sec": 0.2,
-      "min_hp": 500,
-      "save_recovery_check_sec": 5.0,
-      "save_recovery_key": "h"
+      "item": {
+        "keys": ["q"],
+        "min_hp": 1200,
+        "cooldown_sec": 0.3
+      },
+      "skill": {
+        "keys": ["s"],
+        "min_hp": 1500,
+        "cooldown_sec": 0.2,
+        "click_self": true,
+        "key_interval_sec": 0.1,
+        "skill_delay_sec": 0.5
+      },
+      "save_recovery_check_sec": 20.0
     },
     "death_return": {
       "hp_at_most": 1,
@@ -161,7 +176,8 @@
       "second_delta_x_cells": 1.7,
       "second_delta_y_cells": 2.5,
       "town_return_retry_sec": 8.0,
-      "town_return_escape_key": "escape"
+      "town_return_max_attempts": 10,
+      "town_return_escape_key": "esc"
     },
     "idle_action": {
       "key": "t",
@@ -170,34 +186,97 @@
       "suppress_while_visible_name": true
     },
     "overweight": {
-      "ratio": 0.9,
-      "key": "h",
+      "ratio": 0.7,
       "press_interval_sec": 4.0
+    },
+    "sp_sit": {
+      "sit_key": "space",
+      "sit_when_sp_below": 10,
+      "max_weight_ratio": 0.7,
+      "postpone_after_interrupt_sec": 45.0,
+      "min_hp_drop": 1
     },
     "escape": {
       "key": "t",
       "cooldown_sec": 3.0
     },
+    "staff_guard": {
+      "min_gid": 2000000,
+      "max_gid": 2500000,
+      "max_distance_cells": 20,
+      "name_substrings": ["GM", "Admin", "Staff"]
+    },
+    "buff_healer_suppress_sec": 900,
+    "buff_farm_map_only": true,
+    "buff_step_gap_sec": 1.0,
+    "buff_click_self": true,
+    "buff_skill_delay_sec": 0.2,
     "buffs": [
       {
         "order": 1,
         "key": "f",
-        "interval_sec": 1740.0
+        "interval_sec": 1740
       },
       {
         "order": 2,
         "key": "c",
-        "interval_sec": 1140.0
+        "interval_sec": 1140
+      }
+    ],
+    "self_buffs": [
+      {
+        "order": 1,
+        "key": "d",
+        "interval_sec": 240
+      },
+      {
+        "order": 2,
+        "key": "a",
+        "interval_sec": 240
       }
     ],
     "return_to_farm": {
-      "home_navigation_enabled": false,
+      "go_home": {
+        "method": "skill",
+        "skill_key": "v",
+        "skill_delay_sec": 0.8,
+        "menu": [
+          ["down", 0.5],
+          ["enter", 0]
+        ]
+      },
+      "home_map": "aldebaran",
+      "home_prep_preset": "comodo_skill_warp",
+      "home_prep_preset_enabled": false,
+      "skill_warp_home_map": "comodo",
+      "skill_warp_home_navigation_enabled": false,
+      "skill_warp_menu": [
+        ["down", 0.5],
+        ["enter", 1.5]
+      ],
+      "home_navigation_enabled": true,
       "walk_cells": 3,
       "settle_sec": 1.5,
       "retry_sec": 5.0,
       "max_retries": 4,
-      "active_farm_map": "pay_dun03",
+      "active_farm_map": "mjolnir_02",
       "maps": {
+        "prt_fild03": {
+          "prt_fild02": "right",
+          "prt_monk": "left"
+        },
+        "prt_fild02": {
+          "prt_fild01": "right",
+          "prt_fild03": "left",
+          "prt_fild06": "up",
+          "mjolnir_11": "down"
+        },
+        "pay_fild02": {
+          "pay_fild01": "down",
+          "pay_fild03": "left",
+          "pay_fild05": "up",
+          "pay_fild11": "right"
+        },
         "yuno_fild06": {
           "yuno_fild05": "right",
           "yuno_fild02": "left",
@@ -231,6 +310,15 @@
           "ein_fild03": "right",
           "einbroch": "up",
           "ein_fild05": "left"
+        },
+        "ein_fild09": {
+          "ein_fild08": "right",
+          "ein_fild10": "left",
+          "einbech": "down"
+        },
+        "xmas_dun01": {
+          "xmas": "up",
+          "xmas_dun02": "right"
         },
         "xmas_dun02": {
           "xmas_dun01": "left"

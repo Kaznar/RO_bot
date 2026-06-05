@@ -303,11 +303,19 @@ class BotSession:
             death_return=p.death_return,
             idle_action=p.idle_action,
             overweight=p.overweight,
+            sp_sit=p.sp_sit,
             escape=p.escape,
+            staff_guard=p.staff_guard,
             return_to_farm=augment_return_to_farm_from_registry(
                 p.return_to_farm,
             ),
             buffs=p.buffs,
+            self_buffs=p.self_buffs,
+            buff_healer_suppress_sec=p.buff_healer_suppress_sec,
+            buff_farm_map_only=p.buff_farm_map_only,
+            buff_step_gap_sec=p.buff_step_gap_sec,
+            buff_click_self=p.buff_click_self,
+            buff_skill_delay_sec=p.buff_skill_delay_sec,
         )
         if self._hunt_all:
             return dataclasses.replace(

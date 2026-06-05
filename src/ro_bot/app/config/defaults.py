@@ -27,6 +27,7 @@ DEFAULT_MANUAL_CONTROL_MAPS: list[str] = [
     "einbroch",
     "lighthalzen",
     "hugel",
+    "xmas",
 ]
 
 DEFAULTS: dict[str, Any] = {
@@ -98,9 +99,19 @@ DEFAULTS: dict[str, Any] = {
             "engage_skill_repeat_sec": 1.5,
         },
         "heal": {
-            "key": "q",
-            "cooldown_sec": 1.0,
-            "min_hp": 500,
+            "item": {
+                "keys": ["h"],
+                "min_hp": 1000,
+                "cooldown_sec": 1.0,
+            },
+            "skill": {
+                "keys": ["q"],
+                "min_hp": 500,
+                "cooldown_sec": 1.0,
+                "click_self": False,
+                "key_interval_sec": 0.05,
+                "skill_delay_sec": 0.05,
+            },
             "save_recovery_check_sec": 5.0,
             "save_recovery_key": "h",
         },
@@ -114,13 +125,35 @@ DEFAULTS: dict[str, Any] = {
             "key": "h",
             "press_interval_sec": 4.0,
         },
+        "sp_sit": {
+            "sit_key": "space",
+            "sit_when_sp_below": 10,
+            "max_weight_ratio": 0.7,
+            "postpone_after_interrupt_sec": 45.0,
+            "min_hp_drop": 1,
+        },
         "escape": {
             "key": "t",
             "cooldown_sec": 3.0,
         },
+        "staff_guard": {
+            "min_gid": 2000000,
+            "max_gid": 2500000,
+            "max_distance_cells": 20,
+            "name_substrings": ["GM", "Admin", "Staff"],
+        },
+        "buff_healer_suppress_sec": 900,
+        "buff_farm_map_only": True,
+        "buff_step_gap_sec": 1.0,
+        "buff_click_self": True,
+        "buff_skill_delay_sec": 0.2,
         "buffs": [
-            {"order": 1, "key": "f", "interval_sec": 1800.0},
-            {"order": 2, "key": "c", "interval_sec": 1200.0},
+            {"order": 1, "key": "f", "interval_sec": 1740.0},
+            {"order": 2, "key": "c", "interval_sec": 1140.0},
+        ],
+        "self_buffs": [
+            {"order": 1, "key": "d", "interval_sec": 240.0},
+            {"order": 2, "key": "a", "interval_sec": 240.0},
         ],
     },
 }

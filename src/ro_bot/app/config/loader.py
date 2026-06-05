@@ -32,14 +32,18 @@ from ro_bot.hunt.config import (
     BuffSpec,
     EngagementConfig,
     EscapeConfig,
+    GoHomeConfig,
+    StaffGuardConfig,
     FarmHomeRouteConfig,
     FarmRouteWaypoint,
     FarmTransition,
+    HealChannelConfig,
     HealConfig,
     HomePrepConfig,
     HomePrepStep,
     IdleActionConfig,
     OverweightConfig,
+    SpSitConfig,
     ReturnToFarmConfig,
 )
 from ro_bot.hunt.dead_zones.zone import DeadZone
@@ -211,6 +215,24 @@ def _parse_profile(
         buffs=_parse_buffs(
             _req(data, "buffs", ctx, list), f"{ctx}.buffs",
         ),
+        self_buffs=_parse_buffs(
+            data.get("self_buffs") or [], f"{ctx}.self_buffs",
+        ),
+        buff_healer_suppress_sec=_opt_num(
+            data, "buff_healer_suppress_sec", ctx, default=0.0,
+        ),
+        buff_farm_map_only=_opt_bool(
+            data, "buff_farm_map_only", ctx, default=True,
+        ),
+        buff_step_gap_sec=_opt_num(
+            data, "buff_step_gap_sec", ctx, default=1.0,
+        ),
+        buff_click_self=_opt_bool(
+            data, "buff_click_self", ctx, default=True,
+        ),
+        buff_skill_delay_sec=_opt_num(
+            data, "buff_skill_delay_sec", ctx, default=0.2,
+        ),
         heal=_parse_heal(data.get("heal"), f"{ctx}.heal"),
         death_return=_parse_death_return(
             data.get("death_return"), f"{ctx}.death_return",
@@ -219,7 +241,9 @@ def _parse_profile(
         overweight=_parse_overweight(
             data.get("overweight"), f"{ctx}.overweight",
         ),
+        sp_sit=_parse_sp_sit(data.get("sp_sit"), f"{ctx}.sp_sit"),
         escape=_parse_escape(data.get("escape"), f"{ctx}.escape"),
+        staff_guard=_parse_staff_guard(data.get("staff_guard"), f"{ctx}.staff_guard"),
         engagement=_parse_engagement(
             data.get("engagement"), f"{ctx}.engagement",
         ),
@@ -237,11 +261,13 @@ def _parse_buffs(data: list, ctx: str) -> tuple[BuffSpec, ...]:
         item_ctx = f"{ctx}[{i}]"
         if not isinstance(entry, dict):
             raise ConfigError(f"{item_ctx}: must be a JSON object")
+        order = _req_int(entry, "order", item_ctx)
         items.append((
-            _req_int(entry, "order", item_ctx),
+            order,
             BuffSpec(
                 key=_req(entry, "key", item_ctx, str),
                 interval_sec=_req_num(entry, "interval_sec", item_ctx),
+                order=order,
             ),
         ))
     items.sort(key=lambda pair: pair[0])
@@ -297,20 +323,70 @@ def _parse_aim_offsets(data: Any, ctx: str) -> tuple[AimOffsetSpec, ...]:
     return tuple(out)
 
 
+def _parse_heal_keys(data: dict[str, Any], ctx: str) -> tuple[str, ...]:
+    if "keys" in data:
+        raw = data["keys"]
+        if not isinstance(raw, list) or not raw:
+            raise ConfigError(f"{ctx}.keys: expected non-empty array of strings")
+        parsed = tuple(_parse_str_list(raw, f"{ctx}.keys"))
+        if not parsed:
+            raise ConfigError(f"{ctx}.keys: at least one key required")
+        return parsed
+    if "key" in data:
+        return (_req(data, "key", ctx, str),)
+    raise ConfigError(f"{ctx}: require 'key' (string) or 'keys' (array)")
+
+
+def _parse_heal_channel(data: Any, ctx: str) -> HealChannelConfig:
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object")
+    defaults = HealChannelConfig(keys=("q",), min_hp=0)
+    click_self = defaults.click_self
+    if "click_self" in data:
+        raw = data["click_self"]
+        if not isinstance(raw, bool):
+            raise ConfigError(f"{ctx}.click_self: expected boolean")
+        click_self = raw
+    return HealChannelConfig(
+        keys=_parse_heal_keys(data, ctx),
+        min_hp=_req_int(data, "min_hp", ctx),
+        cooldown_sec=_opt_num(
+            data, "cooldown_sec", ctx, default=defaults.cooldown_sec,
+        ),
+        click_self=click_self,
+        key_interval_sec=_opt_num(
+            data, "key_interval_sec", ctx, default=defaults.key_interval_sec,
+        ),
+        skill_delay_sec=_opt_num(
+            data, "skill_delay_sec", ctx, default=defaults.skill_delay_sec,
+        ),
+    )
+
+
 def _parse_heal(data: Any, ctx: str) -> HealConfig | None:
     if data is None:
         return None
     if not isinstance(data, dict):
         raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    heal_defaults = HealConfig()
+    item: HealChannelConfig | None = None
+    skill: HealChannelConfig | None = None
+    raw_item = data.get("item")
+    raw_skill = data.get("skill")
+    if raw_item is not None:
+        item = _parse_heal_channel(raw_item, f"{ctx}.item")
+    if raw_skill is not None:
+        skill = _parse_heal_channel(raw_skill, f"{ctx}.skill")
+    if item is None and skill is None:
+        skill = _parse_heal_channel(data, ctx)
     return HealConfig(
-        key=_req(data, "key", ctx, str),
-        min_hp=_req_int(data, "min_hp", ctx),
-        cooldown_sec=_opt_num(data, "cooldown_sec", ctx, default=1.0),
+        item=item,
+        skill=skill,
         save_recovery_check_sec=_opt_num(
             data, "save_recovery_check_sec", ctx, default=5.0,
         ),
         save_recovery_key=_opt_str(
-            data, "save_recovery_key", ctx, default="h",
+            data, "save_recovery_key", ctx, default=heal_defaults.save_recovery_key,
         ),
     )
 
@@ -367,8 +443,38 @@ def _parse_death_return(data: Any, ctx: str) -> "DeathReturnConfig | None":
         town_return_retry_sec=_opt_num(
             data, "town_return_retry_sec", ctx, default=d.town_return_retry_sec,
         ),
+        town_return_max_attempts=_opt_int(
+            data, "town_return_max_attempts", ctx,
+            default=d.town_return_max_attempts,
+        ),
         town_return_escape_key=_opt_str(
             data, "town_return_escape_key", ctx, default=d.town_return_escape_key,
+        ),
+    )
+
+
+def _parse_sp_sit(data: Any, ctx: str) -> SpSitConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    defaults = SpSitConfig()
+    return SpSitConfig(
+        sit_key=_opt_str(data, "sit_key", ctx, default=defaults.sit_key),
+        sit_when_sp_below=_opt_int(
+            data, "sit_when_sp_below", ctx, default=defaults.sit_when_sp_below,
+        ),
+        max_weight_ratio=_opt_num(
+            data, "max_weight_ratio", ctx, default=defaults.max_weight_ratio,
+        ),
+        postpone_after_interrupt_sec=_opt_num(
+            data,
+            "postpone_after_interrupt_sec",
+            ctx,
+            default=defaults.postpone_after_interrupt_sec,
+        ),
+        min_hp_drop=_opt_int(
+            data, "min_hp_drop", ctx, default=defaults.min_hp_drop,
         ),
     )
 
@@ -380,13 +486,15 @@ def _parse_overweight(data: Any, ctx: str) -> OverweightConfig | None:
         raise ConfigError(f"{ctx}: must be a JSON object or omitted")
     defaults = OverweightConfig()
     key_raw = data.get("key", defaults.key)
-    if key_raw is None or (isinstance(key_raw, str) and not key_raw.strip()):
-        return None
-    if not isinstance(key_raw, str):
+    if key_raw is None:
+        key = ""
+    elif not isinstance(key_raw, str):
         raise ConfigError(f"{ctx}.key: expected string")
+    else:
+        key = key_raw.strip()
     return OverweightConfig(
         ratio=_opt_num(data, "ratio", ctx, default=defaults.ratio),
-        key=key_raw.strip(),
+        key=key,
         press_interval_sec=_opt_num(
             data, "press_interval_sec", ctx,
             default=defaults.press_interval_sec,
@@ -426,6 +534,37 @@ def _parse_escape(data: Any, ctx: str) -> EscapeConfig | None:
     return EscapeConfig(
         key=_req(data, "key", ctx, str),
         cooldown_sec=_opt_num(data, "cooldown_sec", ctx, default=3.0),
+    )
+
+
+def _parse_staff_guard(data: Any, ctx: str) -> StaffGuardConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    defaults = StaffGuardConfig()
+    raw_names = data.get("name_substrings")
+    if raw_names is None:
+        name_substrings = defaults.name_substrings
+    elif not isinstance(raw_names, list) or not raw_names:
+        raise ConfigError(f"{ctx}.name_substrings: expected non-empty array")
+    else:
+        name_substrings = tuple(
+            _parse_str_list(raw_names, f"{ctx}.name_substrings"),
+        )
+    min_gid = _opt_int(data, "min_gid", ctx, default=defaults.min_gid)
+    max_gid = _opt_int(data, "max_gid", ctx, default=defaults.max_gid)
+    if min_gid > max_gid:
+        raise ConfigError(
+            f"{ctx}: min_gid ({min_gid}) must be <= max_gid ({max_gid})",
+        )
+    return StaffGuardConfig(
+        min_gid=min_gid,
+        max_gid=max_gid,
+        max_distance_cells=_opt_int(
+            data, "max_distance_cells", ctx, default=defaults.max_distance_cells,
+        ),
+        name_substrings=name_substrings,
     )
 
 
@@ -471,9 +610,15 @@ def _parse_return_to_farm(
         home_navigation_enabled = hne
     else:
         home_navigation_enabled = defaults.home_navigation_enabled
-    home_prep = _parse_home_prep(
-        data.get("home_prep"), f"{ctx}.home_prep",
-    )
+    home_map_raw = data.get("home_map")
+    if home_map_raw is None:
+        home_map: str | None = None
+    elif not isinstance(home_map_raw, str):
+        raise ConfigError(f"{ctx}.home_map: expected string or omitted")
+    else:
+        home_map = home_map_raw.strip() or None
+    home_prep = _resolve_return_to_farm_home_prep(data, ctx)
+    go_home = _parse_go_home(data.get("go_home"), f"{ctx}.go_home")
     return ReturnToFarmConfig(
         walk_cells=_opt_int(
             data, "walk_cells", ctx, default=defaults.walk_cells,
@@ -493,10 +638,116 @@ def _parse_return_to_farm(
         ),
         transitions=transitions,
         active_farm_map=active_farm_map,
+        home_map=home_map,
         home_route=home_route,
         home_navigation_enabled=home_navigation_enabled,
         home_prep=home_prep,
+        go_home=go_home,
     )
+
+
+def _parse_go_home(data: Any, ctx: str) -> GoHomeConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{ctx}: must be a JSON object or omitted")
+    defaults = GoHomeConfig()
+    method_raw = data.get("method", defaults.method)
+    if not isinstance(method_raw, str) or not method_raw.strip():
+        raise ConfigError(f"{ctx}.method: expected 'item' or 'skill'")
+    method = method_raw.strip().casefold()
+    if method == "h":
+        method = "item"
+    if method not in ("item", "skill"):
+        raise ConfigError(
+            f"{ctx}.method: expected 'item' or 'skill', got {method_raw!r}",
+        )
+    item_key = _opt_str(
+        data, "item_key", ctx, default=defaults.item_key,
+    ).strip()
+    if not item_key and "key" in data:
+        legacy = data.get("key")
+        if isinstance(legacy, str):
+            item_key = legacy.strip()
+    skill_key = _opt_str(
+        data, "skill_key", ctx, default=defaults.skill_key,
+    ).strip()
+    skill_delay_sec = _opt_num(
+        data, "skill_delay_sec", ctx, default=defaults.skill_delay_sec,
+    )
+    menu_raw = data.get("menu")
+    if menu_raw is None:
+        menu = defaults.menu
+    else:
+        menu = _parse_skill_warp_menu(menu_raw, f"{ctx}.menu")
+    if method == "item" and not item_key:
+        raise ConfigError(f"{ctx}.item_key: required when method is 'item'")
+    if method == "skill" and not skill_key:
+        raise ConfigError(f"{ctx}.skill_key: required when method is 'skill'")
+    return GoHomeConfig(
+        method=method,  # type: ignore[arg-type]
+        item_key=item_key,
+        skill_key=skill_key,
+        skill_delay_sec=skill_delay_sec,
+        menu=menu,
+    )
+
+
+def _parse_skill_warp_menu(
+    data: Any,
+    ctx: str,
+) -> tuple[tuple[str, float], ...]:
+    if data is None:
+        return ()
+    if not isinstance(data, list) or not data:
+        raise ConfigError(
+            f"{ctx}.skill_warp_menu: expected non-empty array of [key, delay_sec]",
+        )
+    out: list[tuple[str, float]] = []
+    for i, entry in enumerate(data):
+        item_ctx = f"{ctx}.skill_warp_menu[{i}]"
+        if not isinstance(entry, list) or len(entry) != 2:
+            raise ConfigError(
+                f"{item_ctx}: expected [key_string, delay_number]",
+            )
+        key_raw, delay_raw = entry[0], entry[1]
+        if not isinstance(key_raw, str) or not key_raw.strip():
+            raise ConfigError(f"{item_ctx}[0]: expected non-empty string")
+        if isinstance(delay_raw, bool) or not isinstance(delay_raw, (int, float)):
+            raise ConfigError(f"{item_ctx}[1]: expected number")
+        out.append((key_raw.strip(), float(delay_raw)))
+    return tuple(out)
+
+
+def _resolve_return_to_farm_home_prep(
+    data: dict[str, Any],
+    ctx: str,
+) -> "HomePrepConfig | None":
+    raw_prep = data.get("home_prep")
+    if raw_prep is not None:
+        return _parse_home_prep(raw_prep, f"{ctx}.home_prep")
+    preset = data.get("home_prep_preset")
+    if preset is None:
+        return None
+    if "home_prep_preset_enabled" in data:
+        enabled = data["home_prep_preset_enabled"]
+        if not isinstance(enabled, bool):
+            raise ConfigError(
+                f"{ctx}.home_prep_preset_enabled: expected boolean",
+            )
+        if not enabled:
+            return None
+    if not isinstance(preset, str) or not preset.strip():
+        raise ConfigError(f"{ctx}.home_prep_preset: expected non-empty string")
+    name = preset.strip()
+    if name != "comodo_skill_warp":
+        raise ConfigError(
+            f"{ctx}.home_prep_preset: unknown {name!r} (known: comodo_skill_warp)",
+        )
+    from ro_bot.hunt.routes.skill_warp_restock import build_comodo_skill_warp_prep
+
+    menu = _parse_skill_warp_menu(data.get("skill_warp_menu"), ctx)
+    return build_comodo_skill_warp_prep(menu if menu else None)
 
 
 def _parse_farm_home_route(
@@ -956,6 +1207,9 @@ def _parse_home_prep_steps(
         dismiss_chat_key = _opt_str(
             entry, "dismiss_chat_key", item_ctx, default="escape",
         )
+        healer_buff_done = _opt_bool(
+            entry, "healer_buff_done", item_ctx, default=False,
+        )
         out.append(
             HomePrepStep(
                 key=key,
@@ -979,6 +1233,7 @@ def _parse_home_prep_steps(
                 dismiss_chat_probe_client=dismiss_chat_probe_client,
                 dismiss_chat_min_channel=dismiss_chat_min_channel,
                 dismiss_chat_key=dismiss_chat_key,
+                healer_buff_done=healer_buff_done,
             ),
         )
     return tuple(out)
@@ -1271,6 +1526,15 @@ def _req_int(data: dict, key: str, ctx: str) -> int:
     if isinstance(value, bool):
         raise ConfigError(f"{ctx}.{key}: expected int, got bool")
     return int(value)
+
+
+def _opt_bool(data: dict, key: str, ctx: str, *, default: bool) -> bool:
+    if key not in data:
+        return default
+    value = data[key]
+    if not isinstance(value, bool):
+        raise ConfigError(f"{ctx}.{key}: expected boolean")
+    return value
 
 
 def _opt_num(data: dict, key: str, ctx: str, *, default: float) -> float:

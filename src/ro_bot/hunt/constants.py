@@ -31,3 +31,7 @@ WEIGHT_SNAPSHOT_INTERVAL_SEC: float = 5.0
 # Extra grace on top of kill timeout + idle windows before the hunt
 # automation stall watchdog forces recovery.
 AUTOMATION_STALL_SLACK_SEC: float = 5.0
+
+# After a stack-cell abandon ladder warp, ignore repeat warps until the
+# teleport animation can finish and abandon counters are cleared.
+STACK_FORCE_WARP_COOLDOWN_SEC: float = 4.0

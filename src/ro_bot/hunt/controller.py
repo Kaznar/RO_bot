@@ -53,6 +53,7 @@ from ro_bot.hunt.constants import (
     IDLE_POLL_SEC,
     NAVIGATION_POLL_SEC,
     NO_CANDIDATE_LOG_INTERVAL_SEC,
+    STACK_FORCE_WARP_COOLDOWN_SEC,
     WEIGHT_SNAPSHOT_INTERVAL_SEC,
 )
 from ro_bot.hunt.dead_zones.filter import DeadZoneFilter
@@ -62,9 +63,11 @@ from ro_bot.hunt.policies.buffs import BuffPolicy
 from ro_bot.hunt.policies.death_return import DeathReturnPolicy
 from ro_bot.hunt.policies.engagement import EngagementMachine, TargetState
 from ro_bot.hunt.policies.escape import EscapePolicy
+from ro_bot.hunt.policies.staff_guard import StaffGuardPolicy
 from ro_bot.hunt.policies.heal import HealPolicy
 from ro_bot.hunt.policies.idle_action import IdleActionPolicy
 from ro_bot.hunt.policies.overweight import OverweightPolicy
+from ro_bot.hunt.policies.sp_sit import SpSitPolicy
 from ro_bot.hunt.policies.approach_stall import ApproachStallPolicy
 from ro_bot.hunt.policies.automation_stall import (
     AutomationStallGuard,
@@ -77,6 +80,7 @@ from ro_bot.hunt.policies.remote_contested import RemoteContestedPolicy
 from ro_bot.hunt.policies.farm_home_route import FarmHomeRoutePolicy
 from ro_bot.hunt.policies.farm_arrival import FarmArrivalPolicy
 from ro_bot.hunt.policies.home_prep import HomePrepPolicy
+from ro_bot.hunt.routes.skill_warp_restock import resolve_home_map
 from ro_bot.hunt.policies.return_to_farm import ReturnToFarmPolicy
 from ro_bot.hunt.policies.stack_cell import (
     pick_candidate,
@@ -139,13 +143,20 @@ class HuntController:
             char_name=cfg.char_name,
         )
 
+        _go_home = (
+            cfg.return_to_farm.go_home
+            if cfg.return_to_farm is not None
+            else None
+        )
         self._heal = (
             HealPolicy(
                 cfg.heal,
                 bridge,
                 sniffer,
                 cfg.manual_control_maps,
+                aim=aim,
                 all_maps=cfg.ignore_map_restrictions,
+                go_home=_go_home,
             )
             if cfg.heal is not None else None
         )
@@ -161,25 +172,70 @@ class HuntController:
             if cfg.death_return is not None
             else None
         )
+        self._active_farm_map = ""
+        if cfg.return_to_farm is not None:
+            self._active_farm_map = cfg.return_to_farm.active_farm_map or ""
         self._buffs = BuffPolicy(
             cfg.buffs,
             bridge,
             sniffer,
             cfg.manual_control_maps,
+            self_buffs=cfg.self_buffs,
+            aim=aim,
+            click_self=cfg.buff_click_self,
+            skill_delay_sec=cfg.buff_skill_delay_sec,
             all_maps=cfg.ignore_map_restrictions,
+            healer_suppress_sec=cfg.buff_healer_suppress_sec,
+            active_farm_map=self._active_farm_map,
+            farm_map_only=cfg.buff_farm_map_only,
+            step_gap_sec=cfg.buff_step_gap_sec,
         )
         self._idle = (
-            IdleActionPolicy(cfg.idle_action, bridge)
+            IdleActionPolicy(
+                cfg.idle_action,
+                bridge,
+                on_teleport=self._notify_hunt_teleport,
+            )
             if cfg.idle_action is not None else None
         )
         self._stall_guard = AutomationStallGuard(automation_stall_limit_sec(cfg))
         self._overweight = (
-            OverweightPolicy(cfg.overweight, bridge)
+            OverweightPolicy(cfg.overweight, bridge, go_home=_go_home)
             if cfg.overweight is not None else None
         )
+        self._sp_sit = (
+            SpSitPolicy(
+                cfg.sp_sit,
+                bridge,
+                active_farm_map=self._active_farm_map,
+            )
+            if cfg.sp_sit is not None and self._active_farm_map
+            else None
+        )
         self._escape = (
-            EscapePolicy(cfg.escape, cfg.dangerous_names, bridge, sniffer)
+            EscapePolicy(
+                cfg.escape,
+                cfg.dangerous_names,
+                bridge,
+                sniffer,
+                on_teleport=self._notify_hunt_teleport,
+            )
             if cfg.escape is not None else None
+        )
+        _staff_home_map = (
+            resolve_home_map(cfg.return_to_farm)
+            if cfg.return_to_farm is not None
+            else ""
+        )
+        self._staff_guard = (
+            StaffGuardPolicy(
+                cfg.staff_guard,
+                sniffer,
+                cfg.manual_control_maps,
+                home_map=_staff_home_map or None,
+                game_hwnd=game_hwnd,
+            )
+            if cfg.staff_guard is not None else None
         )
         self._return_to_farm = (
             ReturnToFarmPolicy(cfg.return_to_farm, aim, player_reader)
@@ -201,7 +257,12 @@ class HuntController:
             cfg, aim, player_reader, bridge, on_completed=on_route_completed,
         )
         self._home_prep = HuntController.make_home_prep_policy(
-            cfg, bridge, player_reader, aim, game_hwnd=self._game_hwnd,
+            cfg,
+            bridge,
+            player_reader,
+            aim,
+            game_hwnd=self._game_hwnd,
+            on_healer_buff_done=self._buffs.suppress_after_healer,
         )
 
         self._dead_zone_filter = dead_zone_filter
@@ -243,6 +304,7 @@ class HuntController:
         self._stack_preferred_cell: tuple[int, int] | None = None
         self._stack_preferred_until: float = 0.0
         self._stack_cell_abandon_counts: dict[tuple[int, int], int] = {}
+        self._stack_force_warp_until: float = 0.0
 
     @staticmethod
     def _make_farm_arrival_policy(
@@ -293,9 +355,10 @@ class HuntController:
         *,
         force_enabled: bool = False,
         game_hwnd: int | None = None,
+        on_healer_buff_done: Callable[[float], None] | None = None,
     ) -> HomePrepPolicy | None:
         rtf = cfg.return_to_farm
-        if rtf is None or rtf.home_route is None:
+        if rtf is None:
             return None
         hp = rtf.home_prep
         if hp is None or not hp.steps:
@@ -306,8 +369,17 @@ class HuntController:
             hp_on = dataclasses.replace(hp, enabled=True)
             rtf = dataclasses.replace(rtf, home_prep=hp_on)
         return HomePrepPolicy(
-            rtf, bridge, player_reader, aim, game_hwnd=game_hwnd,
+            rtf,
+            bridge,
+            player_reader,
+            aim,
+            game_hwnd=game_hwnd,
+            on_healer_buff_done=on_healer_buff_done,
         )
+
+    def _notify_hunt_teleport(self, now: float) -> None:
+        """Defer self-buff (a/d) until after reposition teleports (``t``)."""
+        self._buffs.notify_teleport(now)
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
@@ -338,6 +410,24 @@ class HuntController:
             logger.info(
                 "Overweight policy: ratio=%.2f key='%s' interval=%.1fs",
                 ow.ratio, ow.key, ow.press_interval_sec,
+            )
+        if self._sp_sit is not None:
+            ss = self._cfg.sp_sit
+            assert ss is not None
+            logger.info(
+                "SP sit: farm=%r sp<%d weight<%.0f%% postpone=%.0fs",
+                self._active_farm_map,
+                ss.sit_when_sp_below,
+                100.0 * ss.max_weight_ratio,
+                ss.postpone_after_interrupt_sec,
+            )
+        rtf = self._cfg.return_to_farm
+        if self._home_prep is not None and rtf is not None:
+            logger.info(
+                "Town restock: home_map=%r farm=%r steps=%d",
+                resolve_home_map(rtf),
+                rtf.active_farm_map,
+                len(rtf.home_prep.steps) if rtf.home_prep else 0,
             )
 
     def uninstall(self) -> None:
@@ -391,6 +481,8 @@ class HuntController:
             self._home_prep.shift(delta)
         if self._overweight is not None:
             self._overweight.shift(delta)
+        if self._sp_sit is not None:
+            self._sp_sit.shift(delta)
         if self._last_no_candidate_log:
             self._last_no_candidate_log += delta
         if self._last_weight_log:
@@ -447,6 +539,12 @@ class HuntController:
             return
 
         current_map = self._sniffer.get_map_name() or "?"
+        if self._staff_guard is not None:
+            player_cell = self._read_player_cell()
+            if self._staff_guard.check(current_map, player_cell):
+                self.pause()
+                return
+        self._maybe_arm_town_when_on_home_map(current_map)
         st_mem = self._read_player_state()
         survival = self._suppress_automation_for_death_return_survival(st_mem)
 
@@ -475,9 +573,16 @@ class HuntController:
                 self._pending_warp_return_idle_reason = None
                 return
 
+        prep_automates_town = (
+            self._home_prep is not None
+            and self._home_prep.suppress_farm_home_route_navigation(current_map)
+        )
         route_automates = (
-            self._farm_home_route is not None
-            and self._farm_home_route.should_automate_on_map(current_map)
+            prep_automates_town
+            or (
+                self._farm_home_route is not None
+                and self._farm_home_route.should_automate_on_map(current_map)
+            )
         )
         rtf_active = (
             self._return_to_farm is not None
@@ -539,6 +644,12 @@ class HuntController:
                     self._engagement.state.clear()
                 return
 
+        if prep_suppress:
+            self._stall_guard.mark_progress(now)
+            if self._idle is not None:
+                self._idle.on_map_reset()
+            return
+
         if self._farm_arrival is not None:
             self._farm_arrival.tick(now, current_map)
             if self._farm_arrival.is_active():
@@ -546,8 +657,31 @@ class HuntController:
                     self._engagement.state.clear()
                 return
 
+        if (
+            not survival
+            and self._sp_sit is not None
+            and st_mem is not None
+        ):
+            self._sp_sit.tick(
+                now,
+                current_map,
+                engaged=self._engagement.state.gid is not None,
+                state=st_mem,
+            )
+            if self._sp_sit.blocks_hunt():
+                if self._engagement.state.gid is not None:
+                    self._engagement.state.clear()
+                if self._idle is not None:
+                    self._idle.on_map_reset()
+                self._stall_guard.mark_progress(now)
+                return
+
         if not survival:
             self._buffs.tick(now)
+            if self._buffs.is_busy():
+                if self._engagement.state.gid is not None:
+                    self._engagement.state.clear()
+                return
 
         if survival:
             return
@@ -654,6 +788,8 @@ class HuntController:
                 self._return_to_farm.on_map_change(map_name, time.monotonic())
         if self._overweight is not None:
             self._overweight.on_map_reset()
+        if self._sp_sit is not None:
+            self._sp_sit.on_map_reset()
         self._refresh_client_rect_from_window()
         if (
             mode == "active-hunt"
@@ -735,15 +871,41 @@ class HuntController:
         if self._farm_home_route is not None:
             self._farm_home_route.arm_from_town_arrival()
 
+    def _maybe_arm_town_when_on_home_map(self, current_map: str) -> None:
+        """Arm prep + route while standing on ``home_map`` (e.g. after ``h``)."""
+        rtf = self._cfg.return_to_farm
+        if rtf is None:
+            return
+        hm = resolve_home_map(rtf)
+        if not hm or current_map != hm:
+            return
+        if self._home_prep is not None and not self._home_prep.run_finished:
+            self._home_prep.arm_restock()
+        if self._farm_home_route is not None:
+            self._farm_home_route.arm_from_town_arrival()
+
+    def _idle_suppressed_for_home_prep(self) -> bool:
+        """No hunt idle teleport (``t``) on town while restock route is pending."""
+        if self._home_prep is None or self._home_prep.run_finished:
+            return False
+        rtf = self._cfg.return_to_farm
+        if rtf is None:
+            return False
+        hm = resolve_home_map(rtf)
+        if not hm:
+            return False
+        current_map = self._sniffer.get_map_name() or "?"
+        return current_map == hm
+
     def _maybe_arm_town_return_flow(
         self,
         pairs: tuple[tuple[str | None, str], ...],
     ) -> None:
         """Arm town restock and farm-home navigation after ``home_map`` entry."""
         rtf = self._cfg.return_to_farm
-        if rtf is None or rtf.home_route is None:
+        if rtf is None:
             return
-        hm = (rtf.home_route.home_map or "").strip()
+        hm = resolve_home_map(rtf)
         if not hm:
             return
         for old_map, new_map in pairs:
@@ -1085,9 +1247,14 @@ class HuntController:
             return
         self._last_weight_log = now
         pct = 100.0 * st.weight / st.weight_max
+        sp_part = (
+            f" SP={st.sp}/{st.sp_max}"
+            if st.sp_max > 0
+            else ""
+        )
         logger.info(
-            "Weight snapshot: %d/%d (%.1f%%)",
-            st.weight, st.weight_max, pct,
+            "Weight snapshot: %d/%d (%.1f%%)%s",
+            st.weight, st.weight_max, pct, sp_part,
         )
 
     def _suppress_automation_for_death_return_survival(
@@ -1221,6 +1388,10 @@ class HuntController:
         )
         if not result.candidates:
             self._log_no_candidates(now, visible, result.blocked_by_dead_zone)
+            if self._idle_suppressed_for_home_prep():
+                if self._idle is not None:
+                    self._idle.on_map_reset()
+                return
             if self._idle is None:
                 self._immediate_teleport_pending = False
                 return
@@ -1292,6 +1463,10 @@ class HuntController:
                 now,
                 "mob stack abandon ladder — warp before re-engage",
             ):
+                self._clear_stack_state()
+                self._stack_force_warp_until = (
+                    now + STACK_FORCE_WARP_COOLDOWN_SEC
+                )
                 self._stall_guard.mark_progress(now)
             self._immediate_teleport_pending = False
             return
@@ -1413,6 +1588,8 @@ class HuntController:
         candidates: list,
         now: float,
     ) -> bool:
+        if now < self._stack_force_warp_until:
+            return False
         limit = self._cfg.engagement.stack_cell_warp_after_abandons
         if limit <= 0:
             return False
@@ -1478,9 +1655,20 @@ class HuntController:
     # ── Sniffer-thread callbacks ────────────────────────────────────
 
     def _should_guard_hunt_automation(self, current_map: str) -> bool:
+        if self._home_prep is not None and (
+            self._home_prep.suppress_farm_home_route_navigation(current_map)
+        ):
+            return False
+        prep_automates_town = (
+            self._home_prep is not None
+            and self._home_prep.suppress_farm_home_route_navigation(current_map)
+        )
         route_automates = (
-            self._farm_home_route is not None
-            and self._farm_home_route.should_automate_on_map(current_map)
+            prep_automates_town
+            or (
+                self._farm_home_route is not None
+                and self._farm_home_route.should_automate_on_map(current_map)
+            )
         )
         if self._is_manual_control_map(current_map) and not route_automates:
             return False
@@ -1515,5 +1703,17 @@ class HuntController:
 
     def _on_map_change(self, map_name: str, _x: int, _y: int) -> None:
         old = self._map_change_listener_prev
+        if old is not None and old == map_name:
+            # Wing / idle ``t`` on the same map — not a real map hop.
+            if (
+                self._farm_home_route is not None
+                and self._farm_home_route.is_active()
+            ):
+                self._farm_home_route.on_map_change(
+                    map_name,
+                    time.monotonic(),
+                    from_map=old,
+                )
+            return
         self._events.on_map_reset(old_map=old, new_map=map_name)
         self._map_change_listener_prev = map_name

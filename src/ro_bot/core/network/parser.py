@@ -16,12 +16,11 @@ state + dispatch and keeps file sizes sane.
 from __future__ import annotations
 
 import logging
-import re
 import struct
 from collections.abc import Iterator
 
+from ro_bot.core.network.entity_name_parser import scan_entity_name_packets
 from ro_bot.core.network.packets import (
-    EntityNameHp,
     EntityVanish,
     MapChange,
     PacketConfig,
@@ -85,61 +84,14 @@ def _read_name(data: bytes, offset: int, max_len: int = 24) -> str:
     return chunk.decode("utf-8", errors="replace")
 
 
-# ── 0x0A30 ZC_ACK_REQNAMEALL2 ────────────────────────────────────────
-
-_HP_PATTERN = re.compile(rb"HP:\s*(\d+)/(\d+)")
-_HP_PATTERN_LOOSE = re.compile(rb"HP\s*:?\s*(\d+)\s*/\s*(\d+)")
-
-
 class PacketParser:
-    """Parses the one packet that isn't a simple marker scan: 0x0A30.
-
-    Format: ``[30 0a] [GID:4] [name:24] ... "HP: xxx/yyy" ...``
-
-    Entities are emitted even if the HP pattern isn't found (HP=0/0);
-    mob HP is not consumed by the hunt logic and player HP is sourced
-    separately from 0x00B0.
-    """
+    """Scans entity name / HP opcodes in a TCP payload (see entity_name_parser)."""
 
     def __init__(self, config: PacketConfig | None = None) -> None:
         self._cfg = config or PacketConfig()
 
-    def scan_for_entities(self, data: bytes) -> list[EntityNameHp]:
-        results: list[EntityNameHp] = []
-        marker = struct.pack("<H", self._cfg.entity_name_hp)
-        search_start = 0
-        while True:
-            idx = data.find(marker, search_start)
-            if idx == -1 or idx + 30 > len(data):
-                break
-            gid = struct.unpack_from("<I", data, idx + 2)[0]
-            name = _read_name(data, idx + 6, max_len=24)
-            if not name or not any(c.isalpha() for c in name):
-                search_start = idx + 2
-                continue
-            hp, max_hp = self._extract_hp(data, idx)
-            results.append(EntityNameHp(
-                gid=gid, name=name, hp=hp, max_hp=max_hp,
-            ))
-            search_start = idx + 30
-        return results
-
-    @staticmethod
-    def _extract_hp(data: bytes, start_idx: int) -> tuple[int, int]:
-        search_end = min(start_idx + 120, len(data))
-        m = _HP_PATTERN.search(data, start_idx + 30, search_end)
-        if m is None:
-            m = _HP_PATTERN_LOOSE.search(data[start_idx + 30:search_end])
-        if m is None:
-            # Probe: show what the payload actually contains around the
-            # 0x0A30 marker. Cap via _probe() so it doesn't flood the log.
-            if _probe("0x0A30_nohp"):
-                logger.debug(
-                    "0x0A30 HP miss: hex=%s",
-                    _hex_window(data, start_idx, before=0, after=128),
-                )
-            return 0, 0
-        return int(m.group(1)), int(m.group(2))
+    def scan_for_entities(self, data: bytes):
+        return scan_entity_name_packets(data, self._cfg)
 
 
 # ── Marker-scan iterators ────────────────────────────────────────────

@@ -19,6 +19,7 @@ pool — see ``HuntController.tick``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from ro_bot.core.hid.bridge import HidBridge
 from ro_bot.hunt.config import IdleActionConfig
@@ -33,9 +34,12 @@ class IdleActionPolicy:
         self,
         cfg: IdleActionConfig,
         bridge: HidBridge,
+        *,
+        on_teleport: Callable[[float], None] | None = None,
     ) -> None:
         self._cfg = cfg
         self._bridge = bridge
+        self._on_teleport = on_teleport
         self._idle_since: float | None = None
         self._post_kill_grace: bool = False
 
@@ -103,6 +107,8 @@ class IdleActionPolicy:
         )
         self._idle_since = now
         self._post_kill_grace = False
+        if self._on_teleport is not None:
+            self._on_teleport(now)
         return True
 
     def shift(self, delta: float) -> None:

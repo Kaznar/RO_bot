@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 
 from ro_bot.core.hid.bridge import HidBridge
 from ro_bot.core.hid.exceptions import RightClickUnavailable
@@ -21,6 +22,7 @@ from ro_bot.core.memory.player_state import PlayerReader
 from ro_bot.core.window import sample_client_pixel_rgb
 from ro_bot.hunt.aim_service import AimService
 from ro_bot.hunt.config import HomePrepStep, ReturnToFarmConfig
+from ro_bot.hunt.routes.skill_warp_restock import resolve_home_map
 
 logger = logging.getLogger("ro_bot.hunt")
 
@@ -45,18 +47,22 @@ class HomePrepPolicy:
         aim: AimService,
         *,
         game_hwnd: int | None = None,
+        on_healer_buff_done: Callable[[float], None] | None = None,
     ) -> None:
         prep = cfg.home_prep
         if prep is None:
             raise ValueError("HomePrepPolicy requires ReturnToFarmConfig.home_prep")
-        if cfg.home_route is None:
-            raise ValueError("HomePrepPolicy requires ReturnToFarmConfig.home_route")
+        if not resolve_home_map(cfg):
+            raise ValueError(
+                "HomePrepPolicy requires return_to_farm.home_map or home_route",
+            )
         self._rtf = cfg
         self._prep = prep
         self._bridge = bridge
         self._player_reader = player_reader
         self._aim = aim
         self._game_hwnd = game_hwnd
+        self._on_healer_buff_done = on_healer_buff_done
         self._completed = False
         self._run_started_at: float | None = None
         self._wait_until = 0.0
@@ -233,6 +239,43 @@ class HomePrepPolicy:
                     "Home prep: %s step %d/%d click_client=%s player=%s",
                     tag, idx + 1, total, step.click_client, pc,
                 )
+            elif step.click_cell_offset is not None:
+                if step.click_cell is not None:
+                    logger.error(
+                        "Home prep: %s step %d/%d click_cell_offset "
+                        "cannot combine with click_cell",
+                        tag, idx + 1, total,
+                    )
+                    return False
+                st = self._player_reader.read()
+                pc = (st.x, st.y)
+                if pc == (0, 0):
+                    return False
+                target = (
+                    float(pc[0]) + step.click_cell_offset[0],
+                    float(pc[1]) + step.click_cell_offset[1],
+                )
+                self._aim.shake_mouse(moves=5, max_delta=10)
+                ok = self._aim.aim_and_click(
+                    pc,
+                    target,
+                    aim_settle_sec=0.12,
+                    post_move_sleep_sec=0.08,
+                )
+                if not ok:
+                    logger.warning(
+                        "Home prep: %s step %d/%d click_cell_offset=%s "
+                        "→ (%s,%s) FAILED (will retry)",
+                        tag, idx + 1, total, step.click_cell_offset,
+                        target[0], target[1],
+                    )
+                    return False
+                logger.info(
+                    "Home prep: %s step %d/%d click_cell_offset=%s "
+                    "player=%s target=(%.2f,%.2f)",
+                    tag, idx + 1, total, step.click_cell_offset,
+                    pc, target[0], target[1],
+                )
             elif step.click_cell is not None:
                 st = self._player_reader.read()
                 pc = (st.x, st.y)
@@ -400,6 +443,7 @@ class HomePrepPolicy:
             elif (
                 not step.key
                 and step.click_cell is None
+                and step.click_cell_offset is None
                 and step.click_client is None
                 and step.drag_to_client is None
                 and step.click_client_drag_repeat_count <= 0
@@ -426,6 +470,10 @@ class HomePrepPolicy:
             )
             return False
         return True
+
+    def _notify_healer_buff_done(self, step: HomePrepStep, now: float) -> None:
+        if step.healer_buff_done and self._on_healer_buff_done is not None:
+            self._on_healer_buff_done(now)
 
     def _enter_post_or_finish(self, now: float) -> None:
         prep = self._prep
@@ -516,6 +564,7 @@ class HomePrepPolicy:
                     self._completed = True
                 return
             self._apply_failures = 0
+            self._notify_healer_buff_done(step, now)
             self._wait_until = now + max(0.0, step.delay_after_sec)
             self._idx += 1
             return
@@ -545,14 +594,13 @@ class HomePrepPolicy:
         self._enter_post_or_finish(now)
 
     def _context_ok(self, current_map: str) -> bool:
-        hr = self._rtf.home_route
-        if hr is None or not hr.enabled:
+        hm = resolve_home_map(self._rtf)
+        if not hm:
             return False
         farm = (self._rtf.active_farm_map or "").strip()
         if not farm:
             return False
         cur = current_map.strip()
-        hm = (hr.home_map or "").strip()
         return cur == hm and cur != farm
 
     def _reset_run(self) -> None:

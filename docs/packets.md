@@ -14,7 +14,10 @@ are small, typically one per segment).
 
 | ID | Direction | Name | Size | Source of… |
 |----|-----------|------|------|------------|
-| `0x0A30` | S→C | entity name + HP | variable | Mob names, HP%, whitelist match |
+| `0x0A30` | S→C | ZC_ACK_REQNAMEALL | ~106 B | Primary mob/player name (long form) |
+| `0x0ADF` | S→C | ZC_ACK_REQNAMEALL_NPC | ~58 B | Mob/NPC name + title (post-2017 clients) |
+| `0x0095` | S→C | ZC_ACK_REQNAME | 30 B+ | Legacy short name (+ optional ``HP:`` text) |
+| `0x0977` | S→C | monster HP | 14 B | Binary HP / maxHP (name may arrive separately) |
 | `0x0080` | S→C | entity vanish | 7 B | Death / out-of-sight → blacklist |
 | `0x0087` | S→C | player move | 12 B | Player path (not used for HP) |
 | `0x0088` | S→C | entity stop-move | 10 B | **Only plaintext mob position** |
@@ -26,22 +29,34 @@ spawn / move). Memory scan handles those positions instead.
 
 ## Layouts
 
-### `0x0A30` — entity name + HP
+### Entity name / HP opcodes
 
-Variable length. `PacketParser` scans the TCP payload byte-by-byte
-looking for:
+Decoded in `core/network/entity_name_parser.py` (called from
+`PacketParser.scan_for_entities`).
+
+**`0x0A30` — ZC_ACK_REQNAMEALL** (modern, ~106 B):
 
 ```
-[2B] opcode  (BE 0x0A30)
+[2B] opcode
 [4B] GID
-... name (null-padded, ~24 B typical, up to 96 B) ...
-[4B] HP current
-[4B] HP max
+[24B] name
+[24B] party
+[24B] guild
+[24B] position
+[4B] title_id
 ```
 
-Because the name field is variable, the parser tries candidate
-lengths and validates with `hp ≤ hp_max` + printable ASCII. Tuned
-for NexusRO but works on any eAthena fork that uses the same opcode.
+The bot must advance by the full packet size. A legacy 30 B stride
+re-parses party/guild bytes as fake GIDs and clears mob names.
+
+**`0x0ADF` — ZC_ACK_REQNAMEALL_NPC** (~58 B): `GID`, `groupId`,
+`name[24]`, `title[24]` (title may hold ``HP:`` / ``%`` UI text).
+
+**`0x0095` — ZC_ACK_REQNAME**: `GID` + `name[24]`; some shards append
+``HP: cur/max`` as ASCII.
+
+**`0x0977` — monster HP**: `GID` + `int32 HP` + `int32 maxHP` (updates
+cache only; spawn still needs a name packet).
 
 ### `0x0080` — `ZC_NOTIFY_VANISH`
 

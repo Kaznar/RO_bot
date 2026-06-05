@@ -177,16 +177,29 @@ class FarmHomeRoutePolicy:
         farm_st = farm.strip()
 
         if self._state is None:
-            if (
-                self._navigation_armed
-                and current_map == self._hr.home_map
-                and current_map != farm_st
-            ):
+            if not self._navigation_armed or current_map == farm_st:
+                return
+            if suppress_navigation:
+                return
+            start_idx: int | None = None
+            if current_map == self._hr.home_map:
+                # Skill-warp / prep exits town — waypoints start on the farm map.
+                if self._hr.waypoints[0].map_name == self._hr.home_map:
+                    start_idx = 0
+                else:
+                    return
+            else:
+                start_idx = self._first_waypoint_index_for_map(current_map)
+            if start_idx is not None:
                 grace = max(0.0, self._hr.post_map_change_grace_sec)
                 sup = now + grace if grace > 0 else None
-                self._state = _RouteState(index=0, suppress_clicks_until=sup)
+                self._state = _RouteState(
+                    index=start_idx, suppress_clicks_until=sup,
+                )
                 logger.info(
-                    "Farm home route: armed (%d waypoints → '%s')",
+                    "Farm home route: armed at wp %d/%d on '%s' "
+                    "(%d waypoints → '%s')",
+                    start_idx + 1, len(self._hr.waypoints), current_map,
                     len(self._hr.waypoints), farm_st,
                 )
             return
@@ -202,6 +215,8 @@ class FarmHomeRoutePolicy:
             return
 
         self._sync_index(current_map)
+        if self._state is None:
+            return
         idx = self._state.index
         if idx >= len(wps):
             self._disarm()
@@ -563,6 +578,12 @@ class FarmHomeRoutePolicy:
         dx = abs(player_cell[0] - target_cell[0])
         dy = abs(player_cell[1] - target_cell[1])
         return max(dx, dy) <= r
+
+    def _first_waypoint_index_for_map(self, map_name: str) -> int | None:
+        for j, wp in enumerate(self._hr.waypoints):
+            if wp.map_name == map_name:
+                return j
+        return None
 
     def _sync_index(self, map_name: str) -> None:
         assert self._state is not None

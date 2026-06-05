@@ -40,11 +40,18 @@ class FarmReturnPlan:
         if len(self.waypoints) < 2:
             raise ValueError("FarmReturnPlan needs at least two waypoints")
         object.__setattr__(self, "home_map", hm)
-        if self.waypoints[0].map_name != hm:
-            raise ValueError(
-                f"first waypoint map {self.waypoints[0].map_name!r} "
-                f"must equal home_map {hm!r}",
+        first_map = self.waypoints[0].map_name
+        if first_map != hm:
+            prep_exits_town = (
+                self.home_prep is not None
+                and self.home_prep.enabled
+                and bool(self.home_prep.steps)
             )
+            if not prep_exits_town:
+                raise ValueError(
+                    f"first waypoint map {first_map!r} must equal "
+                    f"home_map {hm!r} (or enable home_prep with steps)",
+                )
 
     def assert_targets_farm(self, active_farm_map: str) -> FarmReturnPlan:
         """Validate last waypoint lies on the configured active farm map."""

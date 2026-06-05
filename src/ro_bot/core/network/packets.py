@@ -4,7 +4,10 @@ Gepard Shield encrypts entity spawn / move packets (0x09FF, 0x09FD,
 0x0086). We bypass that by reading the plaintext packets the server
 still emits:
 
-    0x0A30 — entity name + HP (variable-length pattern scan)
+    0x0A30 — ZC_ACK_REQNAMEALL (name + party/guild/…, long form)
+    0x0ADF — ZC_ACK_REQNAMEALL_NPC (mob/NPC name + title)
+    0x0095 — ZC_ACK_REQNAME (legacy short name)
+    0x0977 — ZC monster HP (binary HP / maxHP)
     0x0080 — entity vanish (7 bytes)
     0x0087 — player movement (12 bytes)
     0x0091 — map change (22 bytes)
@@ -35,6 +38,9 @@ class PacketConfig:
     prototype's experimentally-verified values.
     """
     entity_name_hp: int = 0x0A30
+    entity_name_npc: int = 0x0ADF
+    entity_name_short: int = 0x0095
+    entity_monster_hp: int = 0x0977
     vanish: int = 0x0080
     player_move: int = 0x0087
     map_change: int = 0x0091

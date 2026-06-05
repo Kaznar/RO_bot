@@ -65,6 +65,7 @@ def home_prep_yuno() -> HomePrepConfig:
             HomePrepStep(
                 key="",
                 delay_after_sec=_DELAY_AFTER_HEALER_SEC,
+                healer_buff_done=True,
             ),
         ),
         post_steps=(),

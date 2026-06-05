@@ -440,20 +440,26 @@ class PacketSniffer:
         with self._lock:
             ent = self._entities.get(gid)
             if ent is None:
+                if not name and hp <= 0 and max_hp <= 0:
+                    return
                 self._entities[gid] = EntityState(
                     gid=gid, name=name, hp=hp, max_hp=max_hp, last_seen=now,
                 )
                 is_first_sight = True
             else:
-                ent.name, ent.hp, ent.max_hp, ent.last_seen = (
-                    name, hp, max_hp, now,
-                )
+                if name:
+                    ent.name = name
+                if hp > 0 or max_hp > 0:
+                    ent.hp = hp
+                    ent.max_hp = max_hp
+                ent.last_seen = now
 
         if is_first_sight:
             logger.info(
                 "Entity: GID=%d name='%s' HP=%d/%d", gid, name, hp, max_hp,
             )
-            _safe_call(self._entity_spawn_cb, gid, name)
+            if name:
+                _safe_call(self._entity_spawn_cb, gid, name)
 
     def _on_vanish(self, gid: int, vanish_type: int) -> None:
         with self._lock:

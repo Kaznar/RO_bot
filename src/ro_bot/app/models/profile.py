@@ -17,9 +17,11 @@ from ro_bot.hunt.config import (
     DeathReturnConfig,
     EngagementConfig,
     EscapeConfig,
+    StaffGuardConfig,
     HealConfig,
     IdleActionConfig,
     OverweightConfig,
+    SpSitConfig,
     ReturnToFarmConfig,
 )
 
@@ -34,10 +36,18 @@ class Profile:
     manual_control_maps: frozenset[str] = field(default_factory=frozenset)
     aim_offsets: tuple[AimOffsetSpec, ...] = ()
     buffs: tuple[BuffSpec, ...] = ()
+    self_buffs: tuple[BuffSpec, ...] = ()
+    buff_healer_suppress_sec: float = 0.0
+    buff_farm_map_only: bool = True
+    buff_step_gap_sec: float = 1.0
+    buff_click_self: bool = True
+    buff_skill_delay_sec: float = 0.2
     heal: HealConfig | None = None
     death_return: DeathReturnConfig | None = None
     idle_action: IdleActionConfig | None = None
     overweight: OverweightConfig | None = None
+    sp_sit: SpSitConfig | None = None
     escape: EscapeConfig | None = None
+    staff_guard: StaffGuardConfig | None = None
     engagement: EngagementConfig = field(default_factory=EngagementConfig)
     return_to_farm: ReturnToFarmConfig | None = None

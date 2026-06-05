@@ -8,9 +8,9 @@ until the character reaches a ``manual_control_maps`` town or HP recovers.
 **HP == 0** from sniffer or memory is treated as stale / unknown during normal
 play — it must never trigger death return on its own.
 
-If the character stays on a hunt map, :meth:`tick` presses
-``town_return_escape_key`` after ``town_return_retry_sec`` and repeats the walk
-clicks (e.g. death dialog blocking the warp).
+Attempt 1: walk clicks only. Further attempts (after ``town_return_retry_sec``):
+press ``town_return_escape_key`` to re-open the dialog, then repeat walk clicks,
+up to ``town_return_max_attempts`` tries.
 
 ``delta_y_cells`` defaults negative so that ``player_y + delta`` moves toward
 map south when ``+Y`` is north (common RO layout). Flip the sign if your client
@@ -54,9 +54,8 @@ class DeathReturnPolicy:
         #: After walk clicks, ignore further edges until town warp or retry.
         self._walk_click_latched: bool = False
         self._walk_clicked_at: float | None = None
-        #: Number of retry cycles fired since the latest critical-HP edge.
-        #: Reset on map change or when the sniffer reports HP recovered.
-        self._retry_count: int = 0
+        #: Walk-click attempts this death (1 = first try, no ``esc``).
+        self._attempt_count: int = 0
 
     def on_map_reset(self) -> None:
         self._prev_hp = None
@@ -74,10 +73,10 @@ class DeathReturnPolicy:
 
         if self._walk_click_latched:
             if not self._all_maps and current_map in self._manual_control_maps:
-                if self._retry_count > 0:
+                if self._attempt_count > 1:
                     logger.warning(
-                        "Death return: arrived on %s after %d retry cycle(s)",
-                        current_map, self._retry_count,
+                        "Death return: arrived on %s after %d attempt(s)",
+                        current_map, self._attempt_count,
                     )
                 self._clear_return_pending()
                 return False
@@ -130,7 +129,7 @@ class DeathReturnPolicy:
     def _clear_return_pending(self) -> None:
         self._walk_click_latched = False
         self._walk_clicked_at = None
-        self._retry_count = 0
+        self._attempt_count = 0
 
     def _maybe_town_return_retry(
         self,
@@ -152,34 +151,26 @@ class DeathReturnPolicy:
             self._clear_return_pending()
             return False
 
-        self._retry_count += 1
-        escape = (self._cfg.town_return_escape_key or "").strip()
-        if escape:
-            try:
-                self._bridge.press_key(escape)
-            except Exception:
-                logger.exception(
-                    "Death return: press_key(%r) failed (town retry #%d)",
-                    escape, self._retry_count,
-                )
-            else:
-                logger.warning(
-                    "Death return: retry #%d — pressed %r, still on %s, "
-                    "redoing walk clicks",
-                    self._retry_count, escape, current_map,
-                )
+        max_attempts = self._cfg.town_return_max_attempts
+        if max_attempts > 0 and self._attempt_count >= max_attempts:
+            logger.error(
+                "Death return: gave up after %d attempt(s) on %s",
+                self._attempt_count, current_map,
+            )
+            self._clear_return_pending()
+            return False
+
+        self._attempt_count += 1
+        self._press_return_dialog_key(self._attempt_count)
+        logger.warning(
+            "Death return: attempt %d/%s — still on %s, redoing walk clicks",
+            self._attempt_count,
+            str(max_attempts) if max_attempts > 0 else "∞",
+            current_map,
+        )
 
         self._walk_clicked_at = now
         self._walk_click_latched = False
-
-        # Always re-issue walk clicks on retry while we are still on a hunt
-        # map: ``_sniffer_clears_pending`` above already exits early when
-        # the sniffer reports HP recovered above the critical band, so a
-        # fall-through here means we are still stuck (HP critical, HP=0
-        # death screen, or sniffer/memory disagree). The previous click
-        # cycle clearly did not warp us out, so press escape + walk-click
-        # again, every ``town_return_retry_sec`` until we arrive in a
-        # manual-control map or HP recovers.
         resolved = self._resolve_position(st)
         if resolved is None:
             self._arm_return_pending(now)
@@ -233,12 +224,32 @@ class DeathReturnPolicy:
         if resolved is None:
             return False
         px, py, hp, hp_max = resolved
+        self._attempt_count = 1
         if not self._issue_walk_clicks(
             px, py, hp, hp_max, current_map, reason=reason,
         ):
             return False
         self._arm_return_pending(now)
         return True
+
+    def _press_return_dialog_key(self, attempt: int) -> None:
+        """``esc`` only from attempt 2 onward (attempt 1 would close the dialog)."""
+        if attempt < 2:
+            return
+        key = (self._cfg.town_return_escape_key or "").strip()
+        if not key:
+            return
+        try:
+            self._bridge.press_key(key)
+        except Exception:
+            logger.exception(
+                "Death return: press_key(%r) failed", key,
+            )
+            return
+        logger.warning(
+            "Death return: attempt %d — pressed %r (re-open return dialog)",
+            attempt, key,
+        )
 
     def _sniffer_confirms_crit(self) -> bool:
         hp_sn, hp_max_sn = self._sniffer.get_player_hp()

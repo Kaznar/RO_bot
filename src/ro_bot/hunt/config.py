@@ -9,8 +9,11 @@ controller cannot accidentally drift config during a run.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from ro_bot.hunt.dead_zones.zone import DeadZone
+
+GoHomeMethod = Literal["item", "skill"]
 
 
 @dataclass(frozen=True)
@@ -26,34 +29,43 @@ class AimOffsetSpec:
 
 @dataclass(frozen=True)
 class BuffSpec:
-    """One timed consumable on the hotbar.
+    """One step in a self-buff cast sequence (sorted by ``order``).
 
-    Keys must be unique within the list — the hunt loop tracks the
-    last-pressed timestamp per key, so two ``BuffSpec`` sharing a key
-    would collapse into one timer.
+    ``interval_sec`` on the first step sets the cycle period; other steps
+    should use the same value. Keys must be unique within the list.
     """
     key: str
     interval_sec: float
+    order: int = 0
+
+
+@dataclass(frozen=True)
+class HealChannelConfig:
+    """One heal source (items or skill) with its own HP threshold."""
+
+    keys: tuple[str, ...]
+    min_hp: int
+    cooldown_sec: float = 1.0
+    click_self: bool = False
+    key_interval_sec: float = 0.05
+    skill_delay_sec: float = 0.05
 
 
 @dataclass(frozen=True)
 class HealConfig:
-    """Parameters for the HP heal policy.
+    """HP heal policy — optional ``item`` and ``skill`` channels.
 
-    The policy heals whenever the current HP drops below ``min_hp``
-    (an absolute value). ``hp_max`` from the sniffer is shown in
-    diagnostic logs but does not influence the heal decision.
+    Each channel heals when HP drops below its own ``min_hp`` (absolute).
+    Set a channel's ``min_hp`` to ``0`` to disable it. Channels use
+    independent cooldowns; when both qualify, higher-threshold channels
+    run first (e.g. potions above 500 HP, skill below 500).
 
-    Set ``min_hp = 0`` to disable healing entirely while keeping the
-    rest of the heal block (e.g. its key) configured.
+    Legacy flat JSON (top-level ``keys`` / ``min_hp``) maps to ``skill`` only.
 
-    After the emergency save teleport (HP below 50% of ``min_hp``), wait
-    ``save_recovery_check_sec`` and press ``save_recovery_key`` if HP is
-    still below ``min_hp`` (e.g. no potions left). ``0`` disables the check.
+    Emergency save teleport uses 50% of the **lowest** active ``min_hp``.
     """
-    key: str
-    min_hp: int
-    cooldown_sec: float = 1.0
+    item: HealChannelConfig | None = None
+    skill: HealChannelConfig | None = None
     save_recovery_check_sec: float = 5.0
     save_recovery_key: str = "h"
 
@@ -82,9 +94,10 @@ class DeathReturnConfig:
     ``hp_at_most`` at that value (often ``1``). Memory ``hp == 0`` is
     treated as stale / unknown, not as the normal death UI state.
 
-    If walk clicks do not reach a manual-control town map within
-    ``town_return_retry_sec``, press ``town_return_escape_key`` and repeat
-    the walk clicks. ``0`` disables the retry loop.
+    First attempt: walk clicks only (``esc`` closes the dialog if pressed).
+    If still on a hunt map after ``town_return_retry_sec``, press
+    ``town_return_escape_key`` and repeat walk clicks, up to
+    ``town_return_max_attempts`` total tries. ``0`` disables retries.
     """
     hp_at_most: int = 1
     delta_x_cells: float = 0.0
@@ -94,7 +107,37 @@ class DeathReturnConfig:
     second_delta_y_cells: float | None = None
     second_click_delay_sec: float = 0.12
     town_return_retry_sec: float = 8.0
-    town_return_escape_key: str = "escape"
+    town_return_max_attempts: int = 10
+    #: Re-open the return dialog on attempts 2+ only (not the first click).
+    town_return_escape_key: str = "esc"
+
+
+@dataclass(frozen=True)
+class SpSitConfig:
+    """Sit on farm when memory SP is low; stand when full or interrupted.
+
+    Press ``sit_key`` (default space) to sit. Blocks hunt while sitting.
+    Skips when engaged, overweight (``max_weight_ratio``), or not on
+    ``active_farm_map``. If HP drops by ``min_hp_drop`` while sitting
+    (mob hit), stand and postpone retries for ``postpone_after_interrupt_sec``.
+    """
+    sit_key: str = "space"
+    #: Sit when ``sp < sit_when_sp_below`` (memory).
+    sit_when_sp_below: int = 10
+    max_weight_ratio: float = 0.7
+    postpone_after_interrupt_sec: float = 45.0
+    min_hp_drop: int = 1
+
+
+@dataclass(frozen=True)
+class GoHomeConfig:
+    """Farm → save point: consumable ``item_key`` or skill + menu."""
+
+    method: GoHomeMethod = "item"
+    item_key: str = "h"
+    skill_key: str = "v"
+    skill_delay_sec: float = 0.8
+    menu: tuple[tuple[str, float], ...] = (("down", 0.5), ("enter", 0.0))
 
 
 @dataclass(frozen=True)
@@ -102,11 +145,23 @@ class OverweightConfig:
     """When carried weight is too high, press ``key`` and pause hunt/idle TP.
 
     ``ratio`` applies to ``weight / weight_max`` from memory
-    (:class:`PlayerState`). Empty ``key`` disables the policy.
+    (:class:`PlayerState`). Go-home action comes from
+    ``return_to_farm.go_home`` when set; else one press of ``key``.
     """
     ratio: float = 0.9
-    key: str = "h"
+    key: str = ""
     press_interval_sec: float = 4.0
+
+
+@dataclass(frozen=True)
+class StaffGuardConfig:
+    """Close the game when staff (GM/admin GID band or name) is near on hunt maps."""
+
+    min_gid: int = 2_000_000
+    max_gid: int = 2_500_000
+    #: Chebyshev distance to player; ``0`` = any visible staff on the map.
+    max_distance_cells: int = 20
+    name_substrings: tuple[str, ...] = ("GM", "Admin", "Staff")
 
 
 @dataclass(frozen=True)
@@ -186,6 +241,10 @@ class HomePrepStep:
     prior step that full-clicks the same ``click_client`` pixel: that click
     completes before the drag and can prevent the client from starting a drag.
 
+    ``click_cell_offset``: with empty ``key`` and no client click fields, LMB on
+    ``player + offset`` (memory cell). Mutually exclusive with ``click_cell``.
+    Use for skill warps cast on the cell beside the character.
+
     ``dismiss_chat_probe_client``: optional client pixel sampled at the **start**
     of the step (before clicks / keys). If ``max(R,G,B) >= dismiss_chat_min_channel``,
     the **white chat input** is assumed visible and ``dismiss_chat_key`` is pressed
@@ -196,8 +255,10 @@ class HomePrepStep:
     key: str = ""
     delay_after_sec: float = 2.0
     #: World-map cell (projection); floats allowed (e.g. ``192.5`` for X).
-    #: Mutually exclusive with ``click_client``.
+    #: Mutually exclusive with ``click_client`` and ``click_cell_offset``.
     click_cell: tuple[float, float] | None = None
+    #: Added to current player cell for LMB (skill warp ground target).
+    click_cell_offset: tuple[float, float] | None = None
     #: Game client pixel (0,0 = top-left of client). For inventory UI, etc.
     click_client: tuple[int, int] | None = None
     #: With ``click_client``: LMB drag start → end in client pixels.
@@ -226,6 +287,9 @@ class HomePrepStep:
     dismiss_chat_probe_client: tuple[int, int] | None = None
     dismiss_chat_min_channel: int = 228
     dismiss_chat_key: str = "escape"
+    #: After this step succeeds, pause :class:`BuffPolicy` for
+    #: ``HuntConfig.buff_healer_suppress_sec`` (NPC healer buffs).
+    healer_buff_done: bool = False
 
 
 @dataclass(frozen=True)
@@ -292,9 +356,13 @@ class ReturnToFarmConfig:
     JSON ``home_route`` is ignored while disabled. Neighbor walk-back still
     follows ``maps`` unless you clear those transitions.
 
+    ``home_map`` — town for Kafra / skill-warp restock (e.g. ``comodo``).
+    Used with ``home_prep`` / ``home_prep_preset`` without a per-farm registry
+    plan.
+
     ``home_prep`` (optional) runs :class:`~ro_bot.hunt.policies.home_prep.HomePrepPolicy`
-    on ``home_route.home_map`` before waypoint navigation; requires
-    ``home_route`` and non-empty ``steps`` when enabled.
+    on ``home_map`` before waypoint navigation. With ``home_prep_preset``
+    ``comodo_skill_warp``, a stub ``home_route`` is added automatically.
     """
     walk_cells: int = 10
     settle_sec: float = 1.5
@@ -306,10 +374,14 @@ class ReturnToFarmConfig:
     #: When set, only return toward this farm map; standing on this map
     #: never arms walk-back.
     active_farm_map: str | None = None
+    #: Town map for restock (independent of registry farm plans).
+    home_map: str | None = None
     home_route: FarmHomeRouteConfig | None = None
     #: Town→farm waypoint navigation (registry or JSON ``home_route``).
     home_navigation_enabled: bool = True
     home_prep: HomePrepConfig | None = None
+    #: Farm → save point before town restock (item or skill); see :class:`GoHomeConfig`.
+    go_home: GoHomeConfig | None = None
     #: Optional override; registry merges from :class:`FarmReturnPlan` when empty.
     farm_arrival_steps: tuple[HomePrepStep, ...] = ()
 
@@ -455,9 +527,21 @@ class HuntConfig:
     death_return: DeathReturnConfig | None = None
     idle_action: IdleActionConfig | None = None
     overweight: OverweightConfig | None = None
+    sp_sit: SpSitConfig | None = None
     escape: EscapeConfig | None = None
+    staff_guard: StaffGuardConfig | None = None
     return_to_farm: ReturnToFarmConfig | None = None
+    #: Interval hotkey buffs (e.g. ``f`` / ``c``) on any hunt map.
     buffs: tuple[BuffSpec, ...] = ()
+    #: Self-targeted cast cycle (e.g. ``d`` → click → ``a`` → click) on farm.
+    self_buffs: tuple[BuffSpec, ...] = ()
+    #: Pause ``self_buffs`` after home-prep healer (NPC buff ~15m).
+    buff_healer_suppress_sec: float = 0.0
+    #: ``self_buffs`` only on ``return_to_farm.active_farm_map``.
+    buff_farm_map_only: bool = True
+    buff_step_gap_sec: float = 1.0
+    buff_click_self: bool = True
+    buff_skill_delay_sec: float = 0.2
     aim_offsets: tuple[AimOffsetSpec, ...] = ()
     #: Accept every mob name in targeting (ignore ``allowed_names``).
     target_all_mobs: bool = False

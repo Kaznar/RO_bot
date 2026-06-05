@@ -15,6 +15,7 @@ the GID's memory address.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from ro_bot.core.hid.bridge import HidBridge
 from ro_bot.core.network.sniffer import PacketSniffer
@@ -32,11 +33,14 @@ class EscapePolicy:
         dangerous_names: frozenset[str],
         bridge: HidBridge,
         sniffer: PacketSniffer,
+        *,
+        on_teleport: Callable[[float], None] | None = None,
     ) -> None:
         self._cfg = cfg
         self._dangerous = dangerous_names
         self._bridge = bridge
         self._sniffer = sniffer
+        self._on_teleport = on_teleport
         self._last_at: float = 0.0
 
     def has_danger(self) -> list[tuple[int, str]]:
@@ -74,6 +78,8 @@ class EscapePolicy:
             self._cfg.key,
             ", ".join(f"{n} gid={g}" for g, n in threats),
         )
+        if self._on_teleport is not None:
+            self._on_teleport(now)
         return True
 
     def shift(self, delta: float) -> None:
