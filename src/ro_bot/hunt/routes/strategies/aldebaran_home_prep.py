@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ro_bot.hunt.config import HomePrepConfig, HomePrepStep
 from ro_bot.hunt.routes.town import (
     Healer,
@@ -37,15 +39,18 @@ _MJOLNIR_WARP_KEYS: tuple[tuple[str, float], ...] = (
 
 def home_prep_aldebaran() -> HomePrepConfig:
     """Aldebaran save → Kafra storage → healer → Kafra warp to farm."""
-    warp = _KAFRA.warp_from_npc_steps(
+    warp_raw = _KAFRA.warp_from_npc_steps(
         _MJOLNIR_WARP_KEYS,
         lead_clicks=2,
         click_delay_sec=1.5,
     )
+    warp = (replace(warp_raw[0], kafra_warp_retry_anchor=True),) + warp_raw[1:]
     return HomePrepConfig(
         enabled=True,
         max_total_sec=180.0,
         finish_when_weight_ratio_below=0.0,
+        retry_kafra_warp_until_farm_map=True,
+        kafra_warp_max_retries=3,
         steps=(
             HomePrepStep(
                 key="",

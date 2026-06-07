@@ -138,6 +138,16 @@ class GoHomeConfig:
     skill_key: str = "v"
     skill_delay_sec: float = 0.8
     menu: tuple[tuple[str, float], ...] = (("down", 0.5), ("enter", 0.0))
+    #: Min seconds between consecutive key presses in the skill sequence.
+    step_delay_sec: float = 0.8
+    #: Client pixel for chat-bar brightness probe before ``skill_key``.
+    dismiss_chat_probe_client: tuple[int, int] | None = None
+    dismiss_chat_min_channel: int = 228
+    dismiss_chat_key: str = "escape"
+    #: Hotbar key for SP regen item; one press before ``skill_key`` when SP is low.
+    sp_regen_item_key: str = ""
+    #: Minimum SP required for ``skill_key`` (warp costs e.g. 10 SP).
+    skill_min_sp: int = 10
 
 
 @dataclass(frozen=True)
@@ -290,6 +300,9 @@ class HomePrepStep:
     #: After this step succeeds, pause :class:`BuffPolicy` for
     #: ``HuntConfig.buff_healer_suppress_sec`` (NPC healer buffs).
     healer_buff_done: bool = False
+    #: First step of a Kafra warp block; used with
+    #: :attr:`HomePrepConfig.retry_kafra_warp_until_farm_map`.
+    kafra_warp_retry_anchor: bool = False
 
 
 @dataclass(frozen=True)
@@ -301,6 +314,11 @@ class HomePrepConfig:
     #: When > 0, wait until ``weight / weight_max`` drops below this ratio.
     finish_when_weight_ratio_below: float = 0.0
     max_total_sec: float = 180.0
+    #: After all ``steps``, if still on ``home_map``, rewind to the step marked
+    #: ``kafra_warp_retry_anchor`` and replay the warp block (up to
+    #: ``kafra_warp_max_retries`` times).
+    retry_kafra_warp_until_farm_map: bool = False
+    kafra_warp_max_retries: int = 3
 
 
 @dataclass(frozen=True)
@@ -502,7 +520,7 @@ class EngagementConfig:
     engage_skill_key: str | None = None
     #: Pause after ``engage_skill_key`` before the aim click (seconds).
     engage_skill_delay_sec: float = 0.05
-    #: In skill mode, min seconds between recasts on a stationary in-range mob.
+    #: Min seconds between ``engage_skill_key`` presses while a target is engaged.
     engage_skill_repeat_sec: float = 1.5
 
 

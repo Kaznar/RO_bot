@@ -23,10 +23,12 @@ class OverweightPolicy:
         bridge: HidBridge,
         *,
         go_home: GoHomeConfig | None = None,
+        game_hwnd: int | None = None,
     ) -> None:
         self._cfg = cfg
         self._bridge = bridge
         self._go_home = go_home
+        self._game_hwnd = game_hwnd
         self._last_press_at: float = 0.0
 
     def is_overloaded(self, state: PlayerState) -> bool:
@@ -36,7 +38,7 @@ class OverweightPolicy:
             return False
         return state.weight >= self._cfg.ratio * state.weight_max
 
-    def tick(self, now: float) -> None:
+    def tick(self, now: float, *, current_sp: int | None = None) -> None:
         """Go home at most once per ``press_interval_sec``."""
         if not go_home_configured(self._go_home) and not self._cfg.key:
             return
@@ -46,7 +48,12 @@ class OverweightPolicy:
         try:
             if go_home_configured(self._go_home):
                 assert self._go_home is not None
-                execute_go_home(self._bridge, self._go_home)
+                execute_go_home(
+                    self._bridge,
+                    self._go_home,
+                    game_hwnd=self._game_hwnd,
+                    current_sp=current_sp,
+                )
                 label = (
                     f"skill {self._go_home.skill_key!r}"
                     if self._go_home.method == "skill"

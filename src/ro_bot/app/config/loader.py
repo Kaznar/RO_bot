@@ -597,6 +597,8 @@ def _parse_return_to_farm(
         )
     else:
         active_farm_map = active_raw.strip() or None
+    if active_farm_map is None:
+        _validate_farm_transitions_without_active_farm(transitions, ctx)
     home_route = _parse_farm_home_route(
         data.get("home_route"),
         f"{ctx}.home_route",
@@ -675,6 +677,43 @@ def _parse_go_home(data: Any, ctx: str) -> GoHomeConfig | None:
     skill_delay_sec = _opt_num(
         data, "skill_delay_sec", ctx, default=defaults.skill_delay_sec,
     )
+    step_delay_sec = _opt_num(
+        data, "step_delay_sec", ctx, default=defaults.step_delay_sec,
+    )
+    dismiss_chat_probe_client = _parse_client_xy_pair(
+        data.get("dismiss_chat_probe_client"),
+        f"{ctx}.dismiss_chat_probe_client",
+    )
+    dismiss_chat_min_channel = int(
+        round(
+            _opt_num(
+                data,
+                "dismiss_chat_min_channel",
+                ctx,
+                default=float(defaults.dismiss_chat_min_channel),
+            ),
+        ),
+    )
+    if not 0 <= dismiss_chat_min_channel <= 255:
+        raise ConfigError(f"{ctx}.dismiss_chat_min_channel: must be 0..255")
+    dismiss_chat_key = _opt_str(
+        data, "dismiss_chat_key", ctx, default=defaults.dismiss_chat_key,
+    )
+    sp_regen_item_key = _opt_str(
+        data, "sp_regen_item_key", ctx, default=defaults.sp_regen_item_key,
+    ).strip()
+    skill_min_sp = int(
+        round(
+            _opt_num(
+                data,
+                "skill_min_sp",
+                ctx,
+                default=float(defaults.skill_min_sp),
+            ),
+        ),
+    )
+    if skill_min_sp < 0:
+        raise ConfigError(f"{ctx}.skill_min_sp: must be >= 0")
     menu_raw = data.get("menu")
     if menu_raw is None:
         menu = defaults.menu
@@ -689,6 +728,12 @@ def _parse_go_home(data: Any, ctx: str) -> GoHomeConfig | None:
         item_key=item_key,
         skill_key=skill_key,
         skill_delay_sec=skill_delay_sec,
+        step_delay_sec=step_delay_sec,
+        dismiss_chat_probe_client=dismiss_chat_probe_client,
+        dismiss_chat_min_channel=dismiss_chat_min_channel,
+        dismiss_chat_key=dismiss_chat_key,
+        sp_regen_item_key=sp_regen_item_key,
+        skill_min_sp=skill_min_sp,
         menu=menu,
     )
 
@@ -919,6 +964,18 @@ def _parse_home_prep(data: Any, ctx: str) -> HomePrepConfig | None:
         ),
         max_total_sec=_opt_num(
             data, "max_total_sec", ctx, default=defaults.max_total_sec,
+        ),
+        retry_kafra_warp_until_farm_map=_opt_bool(
+            data,
+            "retry_kafra_warp_until_farm_map",
+            ctx,
+            default=defaults.retry_kafra_warp_until_farm_map,
+        ),
+        kafra_warp_max_retries=_opt_int(
+            data,
+            "kafra_warp_max_retries",
+            ctx,
+            default=defaults.kafra_warp_max_retries,
         ),
     )
 
@@ -1210,6 +1267,9 @@ def _parse_home_prep_steps(
         healer_buff_done = _opt_bool(
             entry, "healer_buff_done", item_ctx, default=False,
         )
+        kafra_warp_retry_anchor = _opt_bool(
+            entry, "kafra_warp_retry_anchor", item_ctx, default=False,
+        )
         out.append(
             HomePrepStep(
                 key=key,
@@ -1234,6 +1294,7 @@ def _parse_home_prep_steps(
                 dismiss_chat_min_channel=dismiss_chat_min_channel,
                 dismiss_chat_key=dismiss_chat_key,
                 healer_buff_done=healer_buff_done,
+                kafra_warp_retry_anchor=kafra_warp_retry_anchor,
             ),
         )
     return tuple(out)
@@ -1242,7 +1303,6 @@ def _parse_home_prep_steps(
 def _parse_farm_transitions(
     data: dict, ctx: str,
 ) -> tuple[FarmTransition, ...]:
-    seen_neighbors: dict[str, str] = {}
     items: list[FarmTransition] = []
     for farm_map, neighbors in data.items():
         farm_ctx = f"{ctx}.{farm_map}"
@@ -1267,19 +1327,29 @@ def _parse_farm_transitions(
                     f"{n_ctx}: direction must be one of "
                     f"{sorted(VALID_DIRECTIONS)} (got {direction!r})"
                 )
-            if neighbor in seen_neighbors:
-                raise ConfigError(
-                    f"{n_ctx}: neighbor '{neighbor}' already configured for "
-                    f"farm map '{seen_neighbors[neighbor]}' — a neighbor can "
-                    "only belong to one farm map"
-                )
-            seen_neighbors[neighbor] = farm_map
             items.append(FarmTransition(
                 farm_map=farm_map,
                 neighbor_map=neighbor,
                 direction=direction,
             ))
     return tuple(items)
+
+
+def _validate_farm_transitions_without_active_farm(
+    transitions: tuple[FarmTransition, ...],
+    ctx: str,
+) -> None:
+    """Legacy lookup is keyed by neighbor only — duplicates are ambiguous."""
+    seen_neighbors: dict[str, str] = {}
+    for t in transitions:
+        if t.neighbor_map in seen_neighbors:
+            raise ConfigError(
+                f"{ctx}.maps.{t.neighbor_map}: neighbor '{t.neighbor_map}' "
+                f"already configured for farm map "
+                f"'{seen_neighbors[t.neighbor_map]}' — set "
+                f"{ctx}.active_farm_map to disambiguate"
+            )
+        seen_neighbors[t.neighbor_map] = t.farm_map
 
 
 def _parse_optional_skill_key(
@@ -1519,6 +1589,20 @@ def _req_num(data: dict, key: str, ctx: str) -> float:
             f"{ctx}.{key}: expected number, got {type(value).__name__}"
         )
     return float(value)
+
+
+def _parse_client_xy_pair(data: Any, ctx: str) -> tuple[int, int] | None:
+    if data is None:
+        return None
+    if isinstance(data, dict):
+        return (_req_int(data, "x", ctx), _req_int(data, "y", ctx))
+    if (
+        isinstance(data, list)
+        and len(data) == 2
+        and all(isinstance(v, int) for v in data)
+    ):
+        return (int(data[0]), int(data[1]))
+    raise ConfigError(f"{ctx}: expected {{x,y}} or [x,y] int pair")
 
 
 def _req_int(data: dict, key: str, ctx: str) -> int:

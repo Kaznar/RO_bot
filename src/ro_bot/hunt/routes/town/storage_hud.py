@@ -76,7 +76,7 @@ def deposit_to_storage_steps() -> tuple[HomePrepStep, ...]:
         HomePrepStep(
             click_client=_LOOT_ITEM_CLIENT,
             drag_to_client=_STORAGE_FROM_LOOT_CLIENT,
-            click_client_drag_repeat_count=10,
+            click_client_drag_repeat_count=15,
             click_client_drag_repeat_interval_sec=0.38,
             key="enter",
             delay_after_sec=1.0,
@@ -89,7 +89,7 @@ def deposit_to_storage_steps() -> tuple[HomePrepStep, ...]:
         HomePrepStep(
             click_client=_EQUIP_ITEM_CLIENT,
             drag_to_client=_STORAGE_FROM_EQUIP_CLIENT,
-            click_client_drag_repeat_count=15,
+            click_client_drag_repeat_count=40,
             click_client_drag_repeat_interval_sec=0.38,
             key="",
             delay_after_sec=1.0,
@@ -102,7 +102,7 @@ def deposit_to_storage_steps() -> tuple[HomePrepStep, ...]:
         HomePrepStep(
             click_client=_CONSUMABLE_ITEM_CLIENT,
             drag_to_client=_STORAGE_FROM_CONSUMABLE_CLIENT,
-            click_client_drag_repeat_count=10,
+            click_client_drag_repeat_count=15,
             click_client_drag_repeat_interval_sec=0.38,
             key="enter",
             delay_after_sec=1.0,

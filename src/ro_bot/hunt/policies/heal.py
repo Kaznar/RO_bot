@@ -39,10 +39,12 @@ class HealPolicy:
         aim: AimService | None = None,
         all_maps: bool = False,
         go_home: GoHomeConfig | None = None,
+        game_hwnd: int | None = None,
     ) -> None:
         self._cfg = cfg
         self._bridge = bridge
         self._go_home = go_home
+        self._game_hwnd = game_hwnd
         self._sniffer = sniffer
         self._aim = aim
         self._manual_control_maps = manual_control_maps
@@ -265,7 +267,7 @@ class HealPolicy:
             return True
         try:
             assert self._go_home is not None
-            execute_go_home(self._bridge, self._go_home)
+            execute_go_home(self._bridge, self._go_home, game_hwnd=self._game_hwnd)
         except Exception:
             logger.exception("Go home failed (save recovery)")
             return False

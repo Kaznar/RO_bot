@@ -90,7 +90,12 @@
         "Giant Whisper",
         "Wolf",
         "Mandragora",
-        "Yoyo"
+        "Yoyo",
+        "Eggyra",
+        "Stainer",
+        "Horn",
+        "Poison Spore",
+        "Ambernite"
       ],
       "dangerous": [
         "Hunter Fly",
@@ -151,8 +156,9 @@
       "player_gid_max": 4000000,
       "all_blacklisted_force_tp_sec": 5.0,
       "abandon_target_key": "t",
-      "engage_skill_key": "",
-      "engage_skill_delay_sec": 0.2
+      "engage_skill_key": "w",
+      "engage_skill_delay_sec": 0.2,
+      "engage_skill_repeat_sec": 0.6
     },
     "heal": {
       "item": {
@@ -240,16 +246,20 @@
         "method": "skill",
         "skill_key": "v",
         "skill_delay_sec": 0.8,
+        "step_delay_sec": 0.8,
+        "sp_regen_item_key": "1",
+        "skill_min_sp": 10,
+        "dismiss_chat_probe_client": [176, 887],
         "menu": [
-          ["down", 0.5],
-          ["enter", 0]
+          ["down", 0.8],
+          ["enter", 0.8]
         ]
       },
-      "home_map": "aldebaran",
+      "home_map": "comodo",
       "home_prep_preset": "comodo_skill_warp",
-      "home_prep_preset_enabled": false,
+      "home_prep_preset_enabled": true,
       "skill_warp_home_map": "comodo",
-      "skill_warp_home_navigation_enabled": false,
+      "skill_warp_home_navigation_enabled": true,
       "skill_warp_menu": [
         ["down", 0.5],
         ["enter", 1.5]
@@ -259,8 +269,31 @@
       "settle_sec": 1.5,
       "retry_sec": 5.0,
       "max_retries": 4,
-      "active_farm_map": "mjolnir_02",
+      "active_farm_map": "moc_fild02",
       "maps": {
+        "mjolnir_09": {
+          "prt_fild00": "right",
+          "prt_fild01": "left",
+          "prt_fild05": "up",
+          "mjolnir_08": "down"
+        },
+        "gef_fild09": {
+          "gef_fild09": "right",
+          "gef_fild01": "left",
+          "gef_fild10": "up"
+        },
+        "mjolnir_06": {
+          "gef_fild04": "right",
+          "mjolnir_07": "left",
+          "gef_fild00": "up",
+          "mjolnir_02": "down"
+        },
+        "pay_fild07": {
+          "pay_fild01": "right",
+          "pay_fild10": "left",
+          "pay_fild03": "up",
+          "pay_fild08": "down"
+        },
         "prt_fild03": {
           "prt_fild02": "right",
           "prt_monk": "left"

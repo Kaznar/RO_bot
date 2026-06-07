@@ -7,6 +7,8 @@ Our job is:
   * ``engage`` — skill key (optional) + aim click on a fresh target
   * ``continue_engagement`` — re-click when the mob moves; hold fire when
     already in melee range on a stationary mob (avoids 1-cell jitter)
+  * ``engage_skill_key`` — press on engage / re-aim clicks, and repeat on
+    ``engage_skill_repeat_sec`` while the target stays engaged (key only)
 
 When ``engage_skill_key`` is set, every attack cycle is key + click —
 never a bare-hand LMB.
@@ -56,6 +58,7 @@ class TargetState:
     engage_dist: int = 0
     approach_anchor_cell: tuple[int, int] | None = None
     approach_stationary_since: float | None = None
+    last_engage_skill_at: float = 0.0
 
     def clear(self) -> None:
         self.gid = None
@@ -66,12 +69,15 @@ class TargetState:
         self.engage_dist = 0
         self.approach_anchor_cell = None
         self.approach_stationary_since = None
+        self.last_engage_skill_at = 0.0
 
     def shift(self, delta: float) -> None:
         if self.engaged_at:
             self.engaged_at += delta
         if self.approach_stationary_since is not None:
             self.approach_stationary_since += delta
+        if self.last_engage_skill_at:
+            self.last_engage_skill_at += delta
 
 
 class EngagementMachine:
@@ -109,7 +115,7 @@ class EngagementMachine:
     def _skill_only(self) -> bool:
         return self._engage_skill_key is not None
 
-    def _press_engage_skill(self) -> bool:
+    def _press_engage_skill(self, now: float) -> bool:
         key = self._engage_skill_key
         if key is None:
             return True
@@ -118,18 +124,41 @@ class EngagementMachine:
         except Exception:
             logger.exception("Engage skill: press_key(%r) failed", key)
             return False
+        self.state.last_engage_skill_at = now
         if self._engage_skill_delay_sec > 0:
             time.sleep(self._engage_skill_delay_sec)
         return True
+
+    def _maybe_repeat_engage_skill(self, now: float) -> None:
+        """Key-only recast while a target stays engaged (no LMB)."""
+        key = self._engage_skill_key
+        if key is None or self.state.gid is None:
+            return
+        if (
+            self.state.last_engage_skill_at > 0
+            and now - self.state.last_engage_skill_at < self._engage_skill_repeat_sec
+        ):
+            return
+        try:
+            self._bridge.press_key(key)
+        except Exception:
+            logger.exception("Engage skill repeat: press_key(%r) failed", key)
+            return
+        self.state.last_engage_skill_at = now
+        logger.debug(
+            "Engage skill repeat: key=%r gid=%d",
+            key, self.state.gid,
+        )
 
     def _aim_click_target(
         self,
         player_cell: tuple[int, int],
         target_cell: tuple[int, int],
+        now: float,
         *,
         target_name: str | None,
     ) -> bool:
-        if not self._press_engage_skill():
+        if not self._press_engage_skill(now):
             return False
         return self._aim.aim_and_click(
             player_cell, target_cell, target_name=target_name,
@@ -154,7 +183,7 @@ class EngagementMachine:
         dist = abs(cell[0] - player_cell[0]) + abs(cell[1] - player_cell[1])
         if self._skill_only:
             if not self._aim_click_target(
-                player_cell, cell, target_name=candidate.name,
+                player_cell, cell, now, target_name=candidate.name,
             ):
                 return
             skill_note = f" skill='{self._engage_skill_key}'"
@@ -191,6 +220,7 @@ class EngagementMachine:
             return
         if not self._cells.is_visible(self.state.gid):
             return
+        self._maybe_repeat_engage_skill(now)
         settled = self._cells.settled_cell(self.state.gid, now)
         if settled is None:
             return
@@ -211,14 +241,7 @@ class EngagementMachine:
             and dist <= self._reaim_hold_dist
         )
         if in_hold:
-            if not self._skill_only:
-                return
-            repeat = max(
-                self._reaim_cooldown_sec,
-                self._engage_skill_repeat_sec,
-            )
-            if now - self._aim.last_click_at < repeat:
-                return
+            return
 
         if mob_stationary:
             logger.debug(
@@ -232,7 +255,7 @@ class EngagementMachine:
             )
         if self._skill_only:
             clicked = self._aim_click_target(
-                player_cell, settled, target_name=self.state.name,
+                player_cell, settled, now, target_name=self.state.name,
             )
         else:
             clicked = self._aim.aim_and_click(

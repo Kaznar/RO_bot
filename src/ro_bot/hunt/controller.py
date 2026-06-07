@@ -157,6 +157,7 @@ class HuntController:
                 aim=aim,
                 all_maps=cfg.ignore_map_restrictions,
                 go_home=_go_home,
+                game_hwnd=game_hwnd,
             )
             if cfg.heal is not None else None
         )
@@ -200,7 +201,9 @@ class HuntController:
         )
         self._stall_guard = AutomationStallGuard(automation_stall_limit_sec(cfg))
         self._overweight = (
-            OverweightPolicy(cfg.overweight, bridge, go_home=_go_home)
+            OverweightPolicy(
+                cfg.overweight, bridge, go_home=_go_home, game_hwnd=game_hwnd,
+            )
             if cfg.overweight is not None else None
         )
         self._sp_sit = (
@@ -709,7 +712,7 @@ class HuntController:
                     100.0 * st_ov.weight / st_ov.weight_max,
                 )
                 self._engagement.state.clear()
-            self._overweight.tick(now)
+            self._overweight.tick(now, current_sp=st_ov.sp)
             if not self._was_overweight_last_tick and self._idle is not None:
                 self._idle.on_map_reset()
             self._stall_guard.mark_progress(now)

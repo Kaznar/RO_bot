@@ -54,3 +54,19 @@ def test_preset_disabled_uses_registry_not_skill_warp(tmp_path) -> None:
     assert merged.home_route is not None
     assert merged.home_route.home_map == "xmas"
     assert merged.home_route.waypoints[-1].map_name == "xmas_dun02"
+
+
+def test_shared_neighbor_allowed_with_active_farm_map(tmp_path) -> None:
+    rtf = _parse_return_to_farm(
+        {
+            "active_farm_map": "pay_fild07",
+            "maps": {
+                "pay_fild07": {"pay_fild01": "right"},
+                "pay_fild02": {"pay_fild01": "down"},
+            },
+        },
+        "profile.return_to_farm",
+        config_dir=tmp_path,
+    )
+    assert rtf is not None
+    assert len(rtf.transitions) == 2

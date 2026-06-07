@@ -73,6 +73,7 @@ class HomePrepPolicy:
         self._apply_failures = 0
         self._rmb_unavailable_logged = False
         self._dismiss_chat_probe_no_hwnd_logged = False
+        self._kafra_warp_retries = 0
         #: When False, standing on ``home_map`` at hunt start does not run prep;
         #: set True by :meth:`arm_restock` or by the controller on town arrival
         #: (farm/other map → ``home_map``), e.g. after butterfly wing ``h`` or
@@ -475,6 +476,51 @@ class HomePrepPolicy:
         if step.healer_buff_done and self._on_healer_buff_done is not None:
             self._on_healer_buff_done(now)
 
+    def _kafra_warp_retry_anchor_index(self) -> int | None:
+        for i, step in enumerate(self._prep.steps):
+            if step.kafra_warp_retry_anchor:
+                return i
+        return None
+
+    def _maybe_retry_kafra_warp(self, now: float, current_map: str) -> bool:
+        """Rewind to the Kafra warp block when still on ``home_map`` after prep."""
+        prep = self._prep
+        if not prep.retry_kafra_warp_until_farm_map:
+            return False
+        hm = resolve_home_map(self._rtf)
+        if not hm:
+            return False
+        if current_map.strip() != hm:
+            return False
+        anchor = self._kafra_warp_retry_anchor_index()
+        if anchor is None:
+            logger.warning(
+                "Home prep: retry_kafra_warp_until_farm_map set but no "
+                "kafra_warp_retry_anchor step — finishing",
+            )
+            return False
+        max_r = max(1, prep.kafra_warp_max_retries)
+        if self._kafra_warp_retries >= max_r:
+            logger.warning(
+                "Home prep: still on %r after Kafra warp — "
+                "giving up after %d attempt(s)",
+                hm, self._kafra_warp_retries,
+            )
+            return False
+        self._kafra_warp_retries += 1
+        self._idx = anchor
+        self._wait_until = now + 1.0
+        logger.warning(
+            "Home prep: still on %r after Kafra warp — "
+            "retrying from step %d/%d (%d/%d)",
+            hm,
+            anchor + 1,
+            len(prep.steps),
+            self._kafra_warp_retries,
+            max_r,
+        )
+        return True
+
     def _enter_post_or_finish(self, now: float) -> None:
         prep = self._prep
         if prep.post_steps:
@@ -587,8 +633,13 @@ class HomePrepPolicy:
                     "Home prep: weight OK (%.1f%% < %.0f%%)",
                     100.0 * ratio, 100.0 * thr,
                 )
+                if self._maybe_retry_kafra_warp(now, current_map):
+                    return
                 self._enter_post_or_finish(now)
                 return
+            return
+
+        if self._maybe_retry_kafra_warp(now, current_map):
             return
 
         self._enter_post_or_finish(now)
@@ -613,4 +664,5 @@ class HomePrepPolicy:
         self._apply_failures = 0
         self._rmb_unavailable_logged = False
         self._dismiss_chat_probe_no_hwnd_logged = False
+        self._kafra_warp_retries = 0
         self._restock_armed = False
